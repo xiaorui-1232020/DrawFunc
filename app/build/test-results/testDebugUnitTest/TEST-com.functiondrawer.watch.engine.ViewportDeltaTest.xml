@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.functiondrawer.watch.engine.ViewportDeltaTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-25T10:07:08" hostname="all-in-one-76-lps7p" time="0.024">
+  <properties/>
+  <testcase name="缩放系数等于单位每像素之比的倒数关系" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.001"/>
+  <testcase name="非法视口不会产生 NaN 增量" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.0"/>
+  <testcase name="以某点为焦点缩放时，该点的屏幕坐标必须钉住不动" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.0"/>
+  <testcase name="同一个视口的增量是恒等的" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.0"/>
+  <testcase name="纯平移时只产生位移，不带缩放" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.0"/>
+  <testcase name="视口变了就不是恒等变换" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.001"/>
+  <testcase name="任意两个视口之间，增量变换都要和新视口直接换算一致" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.014"/>
+  <testcase name="手势增量：平移加缩放都必须精确到小数点后四位" classname="com.functiondrawer.watch.engine.ViewportDeltaTest" time="0.007"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.functiondrawer.watch.engine.PlotterTest" tests="38" skipped="0" failures="0" errors="0" timestamp="2026-10-25T10:07:07" hostname="all-in-one-76-lps7p" time="0.129">
+  <properties/>
+  <testcase name="被调用函数的度制走完整条绘图管线" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.008"/>
+  <testcase name="a 和 b 用默认值时 a*x+b 与 x+1 逐点一致" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.002"/>
+  <testcase name="隐函数圆 x2+y2=1" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.008"/>
+  <testcase name="病态表达式不会失控" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="显函数模式里写隐函数要给出明确指引" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="PARAMETRIC 模式的标签是用户指定的描点" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="DEG 画 sin(x) 与弧度画 sin(πx180) 逐点重合" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="参数方程缺一个分量要报错" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="隐函数也接受不带等号的写法" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="隐函数里的 c 真的决定半径" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.005"/>
+  <testcase name="隐藏的函数不产生曲线" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="极坐标 r=1 是圆" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="UI 接线形状：函数列表 + 全局度制 + 滑动条参数 一起喂进去才生效" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.036"/>
+  <testcase name="精度档位越高点数越多" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="DEG 模式下正弦的峰值出现在 x=90" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="极坐标的几何换算也按每条曲线自己的单位" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.005"/>
+  <testcase name="参数方程接受 x= y= 前缀" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="b(x) 等于 2a(x) 时与 2sin(x) 逐点一致（用户报的 bug）" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="显函数接受 y= 前缀" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="每个函数可以带自己的角度单位，且压过全局默认值" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="不传 degrees 的 plot 与显式 false 逐点一致" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.005"/>
+  <testcase name="表达式错误会被记录下来而不是抛出去" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="没传 callables 时 a(x) 还是老行为（向后兼容的默认值）" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="竖直渐近线必须断线" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="多个函数一次画完且各自带颜色和 id" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="参数方程画单位圆" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="Plotter 里 a(x+1) a(a(x)) 2a(x)+1 都与等价表达式逐点一致" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="调用极坐标描点隐函数都会变成那条曲线上的中文报错" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.003"/>
+  <testcase name="DEG 模式下极坐标的极角也按度解释" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.021"/>
+  <testcase name="隐函数画直线 y=x" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="极坐标接受 r= 前缀且支持 θ" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="显函数采样点都落在抛物线上" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="显式传 a b 的取值后画出来的就是另一条曲线" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="四种模式都能解析 a b c d" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.002"/>
+  <testcase name="DEG 也会透传到隐函数模式" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.004"/>
+  <testcase name="尺寸为零的视口直接返回空结果" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <testcase name="tan 不会画出假的竖线" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.0"/>
+  <testcase name="自引用的函数只是那条曲线报错，不会把整次绘图搞崩" classname="com.functiondrawer.watch.engine.PlotterTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

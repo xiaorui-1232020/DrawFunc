@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.functiondrawer.watch.tools.ComplexOpsTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-10-25T10:07:08" hostname="all-in-one-76-lps7p" time="0.008">
+  <properties/>
+  <testcase name="空表达式给一句能读懂的话而不是崩" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.001"/>
+  <testcase name="ExpressionException 之外的情况也被接住" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.001"/>
+  <testcase name="结果变成图上的一个点：横轴实部、纵轴虚部" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.001"/>
+  <testcase name="把 z 代进去算出一个复数" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.0"/>
+  <testcase name="参数 a b 从滑动条那边传进来" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.001"/>
+  <testcase name="引擎的异常类型是公开的" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.0"/>
+  <testcase name="不给参数时按引擎的默认 1 算" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.002"/>
+  <testcase name="语法错误带位置并且不抛异常" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.001"/>
+  <testcase name="失败时不画点也不算标签" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.001"/>
+  <testcase name="名字按大写字母推移并避开已占用的" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.0"/>
+  <testcase name="标签的常见形态" classname="com.functiondrawer.watch.tools.ComplexOpsTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

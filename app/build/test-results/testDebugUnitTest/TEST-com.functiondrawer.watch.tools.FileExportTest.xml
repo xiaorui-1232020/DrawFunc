@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.functiondrawer.watch.tools.FileExportTest" tests="19" skipped="0" failures="0" errors="0" timestamp="2026-10-25T10:07:08" hostname="all-in-one-76-lps7p" time="0.007">
+  <properties/>
+  <testcase name="草稿里手打的 fdf 扩展名不会变成 fdf_fdf" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.002"/>
+  <testcase name="序号加在扩展名前面_而且大小写不敏感地判重" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.001"/>
+  <testcase name="uniqueFileName 在没有冲突时原样返回" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="App 内部有同名文件不影响导出" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="超长名字被拒绝_40 个字是上限" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="四种失败原因都有话说_而且各不相同" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.001"/>
+  <testcase name="草稿为空时退回原名而不是报错" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="落点是下载目录下的 DrawFunc" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="连续撞名就一路往后数" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="撞名时加序号 2" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="用输入框里当前那段文本_而不是磁盘上的原名" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="没有同名时原样用" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="成功提示里有完整路径和最终文件名" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="版本不支持的提示要说清需要什么版本" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.001"/>
+  <testcase name="失败结果原样带出那句话" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="以点开头的名字被拒绝_因为那是隐藏文件" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="草稿和原名都为空才拒绝_并且说明原因" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="非法名字用和重命名同一句话拒绝" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.0"/>
+  <testcase name="uniqueFileName 永远不会给出一个已经被占用的名字" classname="com.functiondrawer.watch.tools.FileExportTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

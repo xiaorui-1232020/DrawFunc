@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.functiondrawer.watch.keyboard.AlphabetModelTest" tests="39" skipped="0" failures="0" errors="0" timestamp="2026-10-25T10:07:08" hostname="all-in-one-76-lps7p" time="0.069">
+  <properties/>
+  <testcase name="applyTo inserts a letter at the cursor" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.005"/>
+  <testcase name="the spec of a cell combines the label and the tone" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.002"/>
+  <testcase name="tapping the case key three times walks through every mode and lands back on lower" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.002"/>
+  <testcase name="upper and lock both output uppercase and only lower outputs lowercase" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="applyTo backspace keeps the whole call deletion rule of the math keyboard" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="applyTo leaves the text alone for the close and case keys" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="applyTo inserts symbols and letters into a half typed expression" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="special characters insert exactly the symbols the requirement asked for" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="applyTo clamps an out of range cursor before editing" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="no alphabet label is longer than two characters" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="the backspace key keeps a label even though it has no cell on the grid yet" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the three case modes cycle lower to upper to lock and back to lower" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the grid is six rows and the first row starts with the back key" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the abc key opens the alphabet keyboard instead of inserting text" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.004"/>
+  <testcase name="applyTo reuses the comma slot jump of the math keyboard" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="letters run through the alphabet exactly once in order" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.003"/>
+  <testcase name="no row is longer than six cells and only the last letter row is short" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the case key is accented whenever the keyboard is not in the default lower mode" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="the default call is the full grid with the case key and the brackets" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="every combination of the two switches is cached and keeps the grid usable" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.005"/>
+  <testcase name="without the brackets the symbols disappear and everything else stays" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="the model stores only lowercase letters so a bad construction is rejected" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the third row of the other page is the space key plus the abc entry key" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="letters only live in the five rows above the action row" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="without the case toggle the letters stay and only that key disappears" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the grid is a cached constant instead of being rebuilt every frame" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.036"/>
+  <testcase name="the space key now takes three quarters of the row and abc takes the rest" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="letter labels follow the mode" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the three mode labels are distinct and the toggle key shows the current one" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the first key is labelled as the way back to the math keyboard" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="adding the abc key did not take anything away from the other page" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="letters and symbols use the normal tone and the back key uses the accent tone" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="only letters and symbols insert text" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.001"/>
+  <testcase name="every cell of the grid renders a non blank label in every mode" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="only the alphabet entry key carries the open alphabet action" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the case mode stays put while typing letters" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="applyTo backspace deletes one character and does nothing at the start" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="the last row is the case key followed by the parens and the comma" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <testcase name="without both the whole action row is dropped instead of left blank" classname="com.functiondrawer.watch.keyboard.AlphabetModelTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
