@@ -8,3 +8,12 @@ app/.cxx/
 .idea/
 *.iml
 .DS_Store
+
+# release 签名材料，绝不入库
+keystore.properties
+keystore/
+*.jks
+*.keystore
+
+# 本地打包产物
+dist/

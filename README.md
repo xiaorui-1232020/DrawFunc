@@ -20,7 +20,7 @@ F(x, y) = 0    隐函数（marching squares）
 | 产物 | 大小 | 说明 |
 |---|---|---|
 | `app/build/outputs/apk/debug/app-debug.apk` | **9,619,159 B（≈9.2 MiB）** | 含两个 ABI 的 `libfunctiondrawer.so` |
-| `app/build/outputs/apk/release/app-release-unsigned.apk` | **4,465,072 B（≈4.3 MiB）** | 未签名；`keystore.properties` 存在时产出已签名包 |
+| `app/build/outputs/apk/release/app-release.apk` | **4,475,883 B（≈4.3 MiB）** | 已配置 release 签名，v1 + v2 + v3 三签（见第四节） |
 
 已验证：
 
@@ -146,7 +146,41 @@ wrapper 会重新下载 130 MB 的 `gradle-8.7-bin.zip`。
 - `abiFilters = armeabi-v7a, arm64-v8a`：目标手表是 32 位 ARM，带上 arm64 便于新设备；
 - `arguments += "-DANDROID_STL=none"`：全是 C，不链 C++ 运行时；
 - `externalNativeBuild.cmake.version = "3.22.1"`，`ndkVersion = "27.2.12479018"`；
-- release 若存在 `keystore.properties` 则签 v1 + v2 + v3（Android 7 的老安装器只认 JAR 签名）。
+- `keystore.properties` 存在时，debug 与 release **共用同一套 release 签名**
+  （签名一致才能 `adb install -r` 覆盖安装，不会清掉表上已有的函数和设置）；
+- release 打开 R8 + 资源压缩，体积从 ~19 MB 降到 ~4.4 MB。
+
+### 签名
+
+签名材料放在仓库根目录，**都不入库**（`.gitignore` 已排除）：
+
+```
+keystore.properties              # 口令与路径
+keystore/functiondrawer-release.jks   # PKCS12，RSA 2048，有效期 10000 天
+```
+
+`keystore.properties` 格式：
+
+```properties
+storeFile=keystore/functiondrawer-release.jks
+storePassword=<口令>
+keyAlias=functiondrawer
+keyPassword=<口令>
+```
+
+重新生成一套（换机或丢失时）：
+
+```bash
+keytool -genkeypair -keystore keystore/functiondrawer-release.jks -alias functiondrawer \
+  -keyalg RSA -keysize 2048 -validity 10000 -storetype PKCS12 \
+  -dname "CN=FunctionDrawer, OU=Watch, O=FunctionDrawer, L=Shanghai, ST=Shanghai, C=CN"
+```
+
+**v1 签名的坑**：AGP 会忽略 `enableV1Signing = true`，`assembleRelease` 出来的包只有
+v2 + v3。Android 7 那批只认 JAR 签名的老安装器会装不上，所以构建后再跑一次
+`tools/sign-release.ps1` 用 apksigner 补成三签（本仓库的发布包就是这样做的）。
+校验时必须显式加 `--min-sdk-version 21`，否则 apksigner 只检 minSdk 需要的档位，
+会把明明存在的 v1 报成 `false`。
 
 ### 安装到表上
 
