@@ -1,0 +1,10 @@
+# 本地工具链（Android SDK / Gradle 缓存），不属于源码
+.toolchain/
+local.properties
+.gradle/
+build/
+app/build/
+app/.cxx/
+.idea/
+*.iml
+.DS_Store

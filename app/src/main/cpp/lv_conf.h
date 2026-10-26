@@ -28,10 +28,24 @@
 #define LV_USE_ARC 1
 #define LV_USE_LINE 1
 #define LV_USE_CANVAS 1
+#define LV_USE_TEXTAREA 1
+#define LV_USE_BUTTONMATRIX 1
 #define LV_USE_FLEX 1
 #define LV_USE_GRID 1
 
-/* 内置字体：仅作为兜底；中文由 ui/font_cn.c 注册的字体接管。 */
+/* PNG 导出的编码器 */
+#define LV_USE_LODEPNG 1
+
+/* lodepng 通过 LVGL 的文件系统接口写文件；用 stdio 驱动，盘符 A。
+ * 代码里传 "A:/绝对路径" 给 lodepng。 */
+#define LV_USE_FS_STDIO 1
+#define LV_FS_STDIO_LETTER 'A'
+#define LV_FS_STDIO_PATH ""
+#define LV_FS_STDIO_CACHE_SIZE 0
+
+/* 内置字体：仅作为兜底；中文由 ui/font_cn_*.c 注册的字体接管。 */
+/* lv_font_conv 生成的字体是 RLE 压缩的（bitmap_format = 1），必须打开解码。 */
+#define LV_USE_FONT_COMPRESSED 1
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_MONTSERRAT_20 1

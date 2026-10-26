@@ -22,6 +22,10 @@ bool app_key(int key_code);
 
 /* 首次进入时建界面。 */
 void app_init(void);
+void app_deinit(void);
+
+/* Java 侧的 filesDir，用于自动保存和存档。 */
+void app_set_files_dir(const char *dir);
 
 #ifdef __cplusplus
 }

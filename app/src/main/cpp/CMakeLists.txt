@@ -21,10 +21,18 @@ file(GLOB APP_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/engine/*.c
         ${CMAKE_CURRENT_SOURCE_DIR}/ui/*.c)
 
+# CMake 的 glob 只在配置期展开，新增文件后不会自动进来；
+# 用 CONFIGURE_DEPENDS 让每次构建都检查目录变化。
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/ui)
+
 add_library(functiondrawer SHARED ${APP_SOURCES})
 target_include_directories(functiondrawer PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/ui
         ${LVGL_DIR})
 target_compile_options(functiondrawer PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

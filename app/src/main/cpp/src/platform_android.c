@@ -1,93 +1,69 @@
 /**
- * Android 平台层：SurfaceView 提供的 ANativeWindow + LVGL 显示/输入驱动。
+ * Android 平台层：SurfaceView → ANativeWindow → LVGL 显示/输入驱动。
  *
- * 渲染线程模型：
- *   - 所有 LVGL 调用都在渲染线程里做，UI 线程只把事件塞进队列；
- *   - 队列分两份：raw（手势检测用）与 lvgl（indev 用），互不干扰；
- *   - flush 时把 LVGL 的 ARGB8888 帧缓冲交换 R/B 后拷进 Surface（ANativeWindow
- *     的 RGBA_8888 内存序与 LVGL 32 位色的字节序相反）。
+ * 渲染线程持有 LVGL 的唯一所有权；所有 JNI 入口都先拿 g_lock，
+ * 所以 UI 线程改界面、渲染线程跑 lv_timer_handler 不会互相踩。
  */
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <math.h>
 #include <pthread.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "lvgl/lvgl.h"
 #include "app.h"
+#include "lvgl.h"
 
-#define TAG "FunctionDrawer"
-#define TOUCH_QUEUE_CAP 64
+#define FD_INPUT_QUEUE 128
 
 typedef struct {
-    int action;
-    int count;
+    uint8_t action;
+    uint8_t count;
     float x0, y0, x1, y1;
-} touch_event_t;
+} fd_input_event;
 
-static ANativeWindow *g_window = NULL;
+static ANativeWindow *g_window;
 static pthread_t g_thread;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static volatile bool g_running = false;
-static volatile bool g_initialized = false;
-static lv_display_t *g_display = NULL;
-static lv_indev_t *g_indev = NULL;
-static uint8_t *g_framebuffer = NULL;
-static int32_t g_width = 0;
-static int32_t g_height = 0;
+static volatile int g_running;
+static int g_thread_started;
+static lv_display_t *g_disp;
+static lv_indev_t *g_indev;
+static uint8_t *g_fb;
+static int32_t g_w, g_h;
 
-static touch_event_t g_raw_queue[TOUCH_QUEUE_CAP];
-static int g_raw_head = 0, g_raw_tail = 0;
-static touch_event_t g_lv_queue[TOUCH_QUEUE_CAP];
-static int g_lv_head = 0, g_lv_tail = 0;
-static pthread_mutex_t g_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+static fd_input_event g_raw_q[FD_INPUT_QUEUE];
+static int g_raw_head, g_raw_tail;
+static fd_input_event g_lv_q[FD_INPUT_QUEUE];
+static int g_lv_head, g_lv_tail;
 
-static void queue_push(touch_event_t *queue, int *head, int *tail, const touch_event_t *ev) {
-    int next = (*head + 1) % TOUCH_QUEUE_CAP;
-    if (next == *tail) {
-        /* 队列满：丢最旧的一条，保证最新手势不丢。 */
-        *tail = (*tail + 1) % TOUCH_QUEUE_CAP;
-    }
-    queue[*head] = *ev;
-    *head = next;
-}
-
-static bool queue_pop(touch_event_t *queue, int *head, int *tail, touch_event_t *out) {
-    if (*tail == *head) return false;
-    *out = queue[*tail];
-    *tail = (*tail + 1) % TOUCH_QUEUE_CAP;
-    return true;
-}
-
-static uint32_t tick_cb(void) {
+static uint32_t tick_cb(void)
+{
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint32_t)(ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL);
+    return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
 }
 
-static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
-    (void)area;
+static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
+{
     if (g_window) {
-        ANativeWindow_Buffer abuf;
-        if (ANativeWindow_lock(g_window, &abuf, NULL) == 0) {
+        ANativeWindow_Buffer buf;
+        if (ANativeWindow_lock(g_window, &buf, NULL) == 0) {
+            const int32_t w = lv_area_get_width(area);
+            const int32_t h = lv_area_get_height(area);
             const uint32_t *src = (const uint32_t *)px_map;
-            uint32_t *dst = (uint32_t *)abuf.bits;
-            const int32_t w = g_width;
-            const int32_t h = g_height;
+            uint32_t *base = (uint32_t *)buf.bits;
             for (int32_t y = 0; y < h; y++) {
-                uint32_t *drow = dst + (size_t)y * abuf.stride;
-                const uint32_t *srow = src + (size_t)y * w;
+                uint32_t *dst = base + (size_t)(area->y1 + y) * buf.stride + area->x1;
+                const uint32_t *s = src + (size_t)y * w;
                 for (int32_t x = 0; x < w; x++) {
-                    uint32_t v = srow[x];
-                    /* ARGB8888（字节序 B,G,R,A）→ RGBA_8888（字节序 R,G,B,A）。 */
-                    drow[x] = (v & 0xFF00FF00u) |
-                              ((v & 0x000000FFu) << 16) |
-                              ((v >> 16) & 0x000000FFu);
+                    /* LVGL 的 ARGB8888 在内存里是 B,G,R,A；Android 要 R,G,B,A。 */
+                    uint32_t c = s[x];
+                    dst[x] = (c & 0xFF00FF00u) | ((c & 0x000000FFu) << 16) |
+                             ((c >> 16) & 0x000000FFu);
                 }
             }
             ANativeWindow_unlockAndPost(g_window);
@@ -96,120 +72,140 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     lv_display_flush_ready(disp);
 }
 
-static lv_indev_state_t g_last_state = LV_INDEV_STATE_RELEASED;
-static lv_point_t g_last_point = {0, 0};
-
-static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-    (void)indev;
-    touch_event_t ev;
-    bool has = false;
-    pthread_mutex_lock(&g_queue_lock);
-    has = queue_pop(g_lv_queue, &g_lv_head, &g_lv_tail, &ev);
-    bool more = (g_lv_head != g_lv_tail);
-    pthread_mutex_unlock(&g_queue_lock);
-
-    if (has) {
-        g_last_point.x = (int32_t)ev.x0;
-        g_last_point.y = (int32_t)ev.y0;
-        switch (ev.action) {
-            case 0: /* ACTION_DOWN */
-            case 2: /* ACTION_MOVE */
-                g_last_state = LV_INDEV_STATE_PRESSED;
-                break;
-            case 1: /* ACTION_UP */
-            case 3: /* ACTION_CANCEL */
-            case 6: /* ACTION_POINTER_UP */
-                g_last_state = LV_INDEV_STATE_RELEASED;
-                break;
-            case 5: /* ACTION_POINTER_DOWN */
-                g_last_state = LV_INDEV_STATE_PRESSED;
-                break;
-            default:
-                break;
-        }
+static lv_indev_state_t action_state(int action)
+{
+    switch (action) {
+        case 0: /* ACTION_DOWN */
+        case 2: /* ACTION_MOVE */
+        case 5: /* ACTION_POINTER_DOWN */
+            return LV_INDEV_STATE_PRESSED;
+        default:
+            return LV_INDEV_STATE_RELEASED;
     }
-    data->point = g_last_point;
-    data->state = g_last_state;
-    data->continue_reading = more;
 }
 
-static void *render_thread(void *arg) {
-    (void)arg;
+static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    static lv_point_t last = {0, 0};
+    static lv_indev_state_t last_state = LV_INDEV_STATE_RELEASED;
+    LV_UNUSED(indev);
+
+    data->continue_reading = false;
+    if (g_lv_head != g_lv_tail) {
+        fd_input_event e = g_lv_q[g_lv_head];
+        g_lv_head = (g_lv_head + 1) % FD_INPUT_QUEUE;
+        last.x = (int32_t)e.x0;
+        last.y = (int32_t)e.y0;
+        last_state = action_state(e.action);
+        data->continue_reading = (g_lv_head != g_lv_tail);
+    }
+    data->point = last;
+    data->state = last_state;
+}
+
+static void push_event(int action, int count,
+                       float x0, float y0, float x1, float y1)
+{
+    int next = (g_raw_tail + 1) % FD_INPUT_QUEUE;
+    if (next != g_raw_head) {
+        g_raw_q[g_raw_tail] = (fd_input_event){
+                (uint8_t)action, (uint8_t)count, x0, y0, x1, y1};
+        g_raw_tail = next;
+    }
+    next = (g_lv_tail + 1) % FD_INPUT_QUEUE;
+    if (next != g_lv_head) {
+        g_lv_q[g_lv_tail] = (fd_input_event){
+                (uint8_t)action, (uint8_t)count, x0, y0, x1, y1};
+        g_lv_tail = next;
+    }
+}
+
+static void display_start_locked(void)
+{
+    if (g_disp || g_w <= 1 || g_h <= 1) return;
+
+    if (!lv_is_initialized()) {
+        lv_init();
+        lv_tick_set_cb(tick_cb);
+    }
+
+    g_fb = (uint8_t *)malloc((size_t)g_w * (size_t)g_h * 4u);
+    if (!g_fb) return;
+
+    g_disp = lv_display_create(g_w, g_h);
+    lv_display_set_color_format(g_disp, LV_COLOR_FORMAT_ARGB8888);
+    lv_display_set_buffers(g_disp, g_fb, NULL, (uint32_t)((size_t)g_w * g_h * 4u),
+                           LV_DISPLAY_RENDER_MODE_FULL);
+    lv_display_set_flush_cb(g_disp, flush_cb);
+
+    g_indev = lv_indev_create();
+    lv_indev_set_type(g_indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(g_indev, indev_read_cb);
+
+    app_set_size(g_w, g_h);
+    app_init();
+}
+
+static void display_stop_locked(void)
+{
+    app_deinit();
+    if (g_indev) {
+        lv_indev_delete(g_indev);
+        g_indev = NULL;
+    }
+    if (g_disp) {
+        lv_display_delete(g_disp);
+        g_disp = NULL;
+    }
+    free(g_fb);
+    g_fb = NULL;
+}
+
+static void *render_thread(void *arg)
+{
+    LV_UNUSED(arg);
     while (g_running) {
         pthread_mutex_lock(&g_lock);
-        touch_event_t ev;
-        while (true) {
-            bool has;
-            pthread_mutex_lock(&g_queue_lock);
-            has = queue_pop(g_raw_queue, &g_raw_head, &g_raw_tail, &ev);
-            pthread_mutex_unlock(&g_queue_lock);
-            if (!has) break;
-            app_touch(ev.action, ev.count, ev.x0, ev.y0, ev.x1, ev.y1);
+        while (g_raw_head != g_raw_tail) {
+            fd_input_event e = g_raw_q[g_raw_head];
+            g_raw_head = (g_raw_head + 1) % FD_INPUT_QUEUE;
+            app_touch(e.action, e.count, e.x0, e.y0, e.x1, e.y1);
         }
         lv_timer_handler();
         pthread_mutex_unlock(&g_lock);
-        usleep(2000);
+        usleep(4000);
     }
     return NULL;
 }
 
-static void stop_render_thread(void) {
-    if (g_running) {
-        g_running = false;
-        pthread_join(g_thread, NULL);
+static void start_thread_locked(void)
+{
+    if (g_thread_started) return;
+    g_running = 1;
+    if (pthread_create(&g_thread, NULL, render_thread, NULL) == 0) {
+        g_thread_started = 1;
+    } else {
+        g_running = 0;
     }
 }
 
-static void release_display(void) {
-    if (g_display) {
-        lv_display_delete(g_display);
-        g_display = NULL;
-        g_indev = NULL;
-    }
-    free(g_framebuffer);
-    g_framebuffer = NULL;
-}
-
-static bool ensure_display(int32_t w, int32_t h) {
-    if (w <= 0 || h <= 0) return false;
-    if (!g_initialized) {
-        lv_init();
-        lv_tick_set_cb(tick_cb);
-        g_initialized = true;
-    }
-    if (g_display && w == g_width && h == g_height) return true;
-
-    release_display();
-    g_width = w;
-    g_height = h;
-
-    g_display = lv_display_create(w, h);
-    if (!g_display) return false;
-    lv_display_set_color_format(g_display, LV_COLOR_FORMAT_ARGB8888);
-
-    size_t bytes = (size_t)w * (size_t)h * 4u;
-    g_framebuffer = (uint8_t *)malloc(bytes);
-    if (!g_framebuffer) return false;
-    memset(g_framebuffer, 0, bytes);
-    lv_display_set_buffers(g_display, g_framebuffer, NULL, (uint32_t)bytes,
-                           LV_DISPLAY_RENDER_MODE_FULL);
-    lv_display_set_flush_cb(g_display, flush_cb);
-
-    if (!g_indev) {
-        g_indev = lv_indev_create();
-        lv_indev_set_type(g_indev, LV_INDEV_TYPE_POINTER);
-        lv_indev_set_read_cb(g_indev, indev_read_cb);
-        lv_indev_set_display(g_indev, g_display);
-    }
-
-    app_set_size(w, h);
-    return true;
+JNIEXPORT void JNICALL
+Java_com_functiondrawer_watch_MainActivity_nativeSetFilesDir(JNIEnv *env, jobject thiz,
+                                                             jstring dir)
+{
+    LV_UNUSED(thiz);
+    const char *utf = dir ? (*env)->GetStringUTFChars(env, dir, NULL) : NULL;
+    pthread_mutex_lock(&g_lock);
+    app_set_files_dir(utf);
+    pthread_mutex_unlock(&g_lock);
+    if (utf) (*env)->ReleaseStringUTFChars(env, dir, utf);
 }
 
 JNIEXPORT void JNICALL
 Java_com_functiondrawer_watch_MainActivity_nativeSurfaceCreated(JNIEnv *env, jobject thiz,
-                                                                jobject surface) {
-    (void)thiz;
+                                                                jobject surface)
+{
+    LV_UNUSED(thiz);
     ANativeWindow *win = ANativeWindow_fromSurface(env, surface);
     pthread_mutex_lock(&g_lock);
     if (g_window) ANativeWindow_release(g_window);
@@ -219,30 +215,46 @@ Java_com_functiondrawer_watch_MainActivity_nativeSurfaceCreated(JNIEnv *env, job
 
 JNIEXPORT void JNICALL
 Java_com_functiondrawer_watch_MainActivity_nativeSurfaceChanged(JNIEnv *env, jobject thiz,
-                                                                jint width, jint height) {
-    (void)env;
-    (void)thiz;
+                                                                jint width, jint height)
+{
+    LV_UNUSED(env);
+    LV_UNUSED(thiz);
     pthread_mutex_lock(&g_lock);
-    stop_render_thread();
     if (g_window) {
-        ANativeWindow_setBuffersGeometry(g_window, width, height, WINDOW_FORMAT_RGBA_8888);
+        ANativeWindow_setBuffersGeometry(g_window, width, height,
+                                         WINDOW_FORMAT_RGBA_8888);
     }
-    if (ensure_display(width, height)) {
-        app_init();
-        if (!g_running) {
-            g_running = true;
-            pthread_create(&g_thread, NULL, render_thread, NULL);
+    if (g_w != width || g_h != height) {
+        if (g_thread_started) {
+            g_running = 0;
+            pthread_mutex_unlock(&g_lock);
+            pthread_join(g_thread, NULL);
+            pthread_mutex_lock(&g_lock);
+            g_thread_started = 0;
+            display_stop_locked();
         }
+        g_w = width;
+        g_h = height;
     }
+    display_start_locked();
+    start_thread_locked();
     pthread_mutex_unlock(&g_lock);
 }
 
 JNIEXPORT void JNICALL
-Java_com_functiondrawer_watch_MainActivity_nativeSurfaceDestroyed(JNIEnv *env, jobject thiz) {
-    (void)env;
-    (void)thiz;
+Java_com_functiondrawer_watch_MainActivity_nativeSurfaceDestroyed(JNIEnv *env, jobject thiz)
+{
+    LV_UNUSED(env);
+    LV_UNUSED(thiz);
     pthread_mutex_lock(&g_lock);
-    stop_render_thread();
+    g_running = 0;
+    pthread_mutex_unlock(&g_lock);
+    if (g_thread_started) {
+        pthread_join(g_thread, NULL);
+        g_thread_started = 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    display_stop_locked();
     if (g_window) {
         ANativeWindow_release(g_window);
         g_window = NULL;
@@ -251,36 +263,36 @@ Java_com_functiondrawer_watch_MainActivity_nativeSurfaceDestroyed(JNIEnv *env, j
 }
 
 JNIEXPORT void JNICALL
-Java_com_functiondrawer_watch_MainActivity_nativeTouch(JNIEnv *env, jobject thiz, jint action,
-                                                       jint count, jfloat x0, jfloat y0,
-                                                       jfloat x1, jfloat y1) {
-    (void)env;
-    (void)thiz;
-    touch_event_t ev = {action, count, x0, y0, x1, y1};
-    pthread_mutex_lock(&g_queue_lock);
-    queue_push(g_raw_queue, &g_raw_head, &g_raw_tail, &ev);
-    /* 双指及以上的事件不进 LVGL：那是画布手势，不能让按钮误触。 */
-    if (count < 2) {
-        queue_push(g_lv_queue, &g_lv_head, &g_lv_tail, &ev);
-    }
-    pthread_mutex_unlock(&g_queue_lock);
+Java_com_functiondrawer_watch_MainActivity_nativeTouch(JNIEnv *env, jobject thiz,
+                                                       jint action, jint count,
+                                                       jfloat x0, jfloat y0,
+                                                       jfloat x1, jfloat y1)
+{
+    LV_UNUSED(env);
+    LV_UNUSED(thiz);
+    pthread_mutex_lock(&g_lock);
+    push_event(action, count, x0, y0, x1, y1);
+    pthread_mutex_unlock(&g_lock);
 }
 
 JNIEXPORT void JNICALL
-Java_com_functiondrawer_watch_MainActivity_nativeCrown(JNIEnv *env, jobject thiz, jfloat delta) {
-    (void)env;
-    (void)thiz;
+Java_com_functiondrawer_watch_MainActivity_nativeCrown(JNIEnv *env, jobject thiz, jfloat delta)
+{
+    LV_UNUSED(env);
+    LV_UNUSED(thiz);
     pthread_mutex_lock(&g_lock);
-    app_crown(delta);
+    if (g_disp) app_crown(delta);
     pthread_mutex_unlock(&g_lock);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_functiondrawer_watch_MainActivity_nativeKey(JNIEnv *env, jobject thiz, jint key_code) {
-    (void)env;
-    (void)thiz;
+Java_com_functiondrawer_watch_MainActivity_nativeKey(JNIEnv *env, jobject thiz, jint code)
+{
+    LV_UNUSED(env);
+    LV_UNUSED(thiz);
+    bool used = false;
     pthread_mutex_lock(&g_lock);
-    bool handled = app_key(key_code);
+    if (g_disp) used = app_key(code);
     pthread_mutex_unlock(&g_lock);
-    return handled ? JNI_TRUE : JNI_FALSE;
+    return used ? JNI_TRUE : JNI_FALSE;
 }

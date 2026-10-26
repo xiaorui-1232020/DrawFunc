@@ -5,7 +5,6 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -13,6 +12,16 @@ android {
 
     // 只能用本机已装的 android-34（SDK 管理器不能联网补装 35/36）。
     compileSdk = 34
+
+    // LVGL 是 C 库，界面全部在 NDK 侧；这里锁定已验证过的 NDK/CMake 版本。
+    ndkVersion = "27.2.12479018"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 
     defaultConfig {
         applicationId = "com.functiondrawer.watch"
@@ -43,6 +52,18 @@ android {
         // 升版本号和 versioncode"，选项里选的是 `1.1 / 3`）。
         versionCode = 3
         versionName = "1.1"
+
+        externalNativeBuild {
+            cmake {
+                // LVGL 只需要 C11；不链 C++ 运行时，包更小。
+                arguments += "-DANDROID_STL=none"
+            }
+        }
+
+        ndk {
+            // 目标手表是 32 位；带上 arm64 以便在新设备/模拟器上也能跑。
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
     }
 
     // release 签名：密钥路径与口令放在项目根目录的 keystore.properties 里
@@ -112,7 +133,8 @@ android {
     }
 
     buildFeatures {
-        compose = true
+        // 界面全部由 C + LVGL 绘制，没有任何 Compose / View 布局。
+        buildConfig = false
     }
 
     lint {
@@ -132,23 +154,6 @@ android {
 }
 
 dependencies {
+    // MainActivity 只用到 WindowCompat / WindowInsetsControllerCompat，其余都在 C 侧。
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.kotlinx.coroutines.android)
-
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.foundation)
-    implementation(libs.androidx.animation)
-    // Compose Material 2 + 手工实现的 MD3 令牌层（见 ui/WatchColors.kt）。
-    // 不用 material3：本机缓存里没有该构件，而且 Maven Central 不可达。
-    implementation(libs.androidx.material)
-    implementation(libs.androidx.material.icons.core)
-    implementation(libs.androidx.ui.tooling.preview)
-    debugImplementation(libs.androidx.ui.tooling)
-
-    // 数学引擎是纯 Kotlin、零 Android 依赖，所以可以直接在 JVM 上跑单元测试。
-    testImplementation(libs.junit)
 }
