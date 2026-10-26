@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cmath.h"
 #include "expr.h"
 #include "model.h"
 #include "plot.h"
@@ -96,6 +97,27 @@ static bool validate_text(const char *src, fd_plot_mode mode, bool degrees,
     char subst[FD_SRC_CAP];
     fd_subst_geo(src, subst, sizeof(subst));
     src = subst;
+
+    /* 复平面模式：按复数表达式校验。 */
+    if (model()->settings.complex_plane) {
+        double values[4];
+        model_param_values(values);
+        fd_param ps[4];
+        static const char *pnames[4] = {"a", "b", "c", "d"};
+        for (int i = 0; i < 4; i++) {
+            ps[i].name = pnames[i];
+            ps[i].value = values[i];
+        }
+        fd_expr_error cerr;
+        memset(&cerr, 0, sizeof(cerr));
+        fd_cpx_node *ce = fd_cpx_compile(src, ps, 4, &cerr);
+        if (!ce) {
+            snprintf(msg, cap, "%s", cerr.message[0] ? cerr.message : "表达式无效");
+            return false;
+        }
+        fd_cpx_free(ce);
+        return true;
+    }
 
     double params[4];
     model_param_values(params);
@@ -532,12 +554,17 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
         lv_obj_center(l);
     }
 
+    /* 复平面模式下按复数求值，类型切换没有意义，整行隐藏。 */
+    if (model()->settings.complex_plane) lv_obj_add_flag(modes, LV_OBJ_FLAG_HIDDEN);
+
     /* 输入框 */
     g_ta1 = make_ta(root, c->fn.src1,
-                    c->fn.mode == FD_PLOT_EXPLICIT ? "例如 sin(x)" : "表达式");
+                    model()->settings.complex_plane
+                            ? "例如 2+3i"
+                            : (c->fn.mode == FD_PLOT_EXPLICIT ? "例如 sin(x)" : "表达式"));
     g_ta2 = NULL;
     g_ta2_row = NULL;
-    if (c->fn.mode == FD_PLOT_PARAMETRIC) {
+    if (c->fn.mode == FD_PLOT_PARAMETRIC && !model()->settings.complex_plane) {
         lv_obj_t *row = lv_obj_create(root);
         g_ta2_row = row;
         lv_obj_remove_style_all(row);

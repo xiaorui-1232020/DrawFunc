@@ -61,6 +61,10 @@ static void add_clicked(lv_event_t *e)
         return;
     }
     int id = model_add_curve(FD_PLOT_EXPLICIT);
+    fd_curve *c = model_curve(id);
+    if (c && model()->settings.complex_plane && c->fn.src1[0] == '\0') {
+        snprintf(c->fn.src1, sizeof(c->fn.src1), "1+i");
+    }
     model_checkpoint();
     model_select(id);
     ui_show(UI_SCR_EDIT);
@@ -171,7 +175,11 @@ static void build_row(lv_obj_t *list, fd_curve *c)
     lv_obj_align(name, LV_ALIGN_TOP_LEFT, 18, 2);
 
     char summary[FD_SRC_CAP * 2 + 16];
-    fd_function_summary(&c->fn, summary, sizeof(summary));
+    if (model()->settings.complex_plane) {
+        snprintf(summary, sizeof(summary), "%s", c->fn.src1);
+    } else {
+        fd_function_summary(&c->fn, summary, sizeof(summary));
+    }
     lv_obj_t *expr = lv_label_create(row);
     lv_label_set_text(expr, summary);
     lv_label_set_long_mode(expr, LV_LABEL_LONG_DOT);

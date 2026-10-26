@@ -388,6 +388,21 @@ int main(int argc, char **argv)
     ui_show(UI_SCR_GRAPH);
     pump(4);
 
+    /* 复平面：一条复数表达式，结果画成点 */
+    {
+        int id = model_add_curve(FD_PLOT_EXPLICIT);
+        fd_curve *c = model_curve(id);
+        if (c) {
+            snprintf(c->fn.src1, sizeof(c->fn.src1), "2+3i");
+            model_select(id);
+        }
+        model()->settings.complex_plane = true;
+        ui_show(UI_SCR_GRAPH);
+        pump(6);
+        dump("20_complex");
+        model()->settings.complex_plane = false;
+    }
+
     /* PNG 导出（先回到图像屏，导出按模型重画） */
     ui_show(UI_SCR_GRAPH);
     pump(6);

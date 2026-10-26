@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "../engine/cmath.h"
 #include "../engine/fd_features.h"
 #include "../engine/plot.h"
 #include "../engine/viewport.h"
@@ -737,6 +738,58 @@ static void update_features(const fd_curve *c)
     if (g_card) lv_obj_set_height(g_card, g_card_h);
 }
 
+static bool cpx_eval_curve(const fd_curve *c, fd_complex *out, fd_expr_error *err)
+{
+    double params[4];
+    model_param_values(params);
+    fd_param ps[4];
+    static const char *names[4] = {"a", "b", "c", "d"};
+    for (int i = 0; i < 4; i++) {
+        ps[i].name = names[i];
+        ps[i].value = params[i];
+    }
+    fd_complex z = {0.0, 0.0};
+    return fd_cpx_eval_text(c->fn.src1, ps, 4, z, out, err);
+}
+
+/** 复平面：单位圆 + 每条曲线的求值点（点旁标「名字=结果」）。 */
+static void draw_complex(void)
+{
+    fd_doc *d = model();
+
+    double upp = d->vp.units_per_px;
+    if (upp > 0.0) {
+        float r = (float)(1.0 / upp);
+        if (r >= 3.0f && r <= 3000.0f) {
+            float cx = fd_vp_to_screen_x(&d->vp, 0.0);
+            float cy = fd_vp_to_screen_y(&d->vp, 0.0);
+            draw_arc(cx, cy, r, 0.0f, (float)(2.0 * M_PI), rgb(FD_C_GRID));
+        }
+    }
+
+    for (int i = 0; i < d->curve_count; i++) {
+        const fd_curve *c = &d->curves[i];
+        if (!c->fn.visible || c->fn.src1[0] == '\0') continue;
+
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) continue;
+        if (!isfinite(v.re) || !isfinite(v.im)) continue;
+
+        float sx = fd_vp_to_screen_x(&d->vp, v.re);
+        float sy = fd_vp_to_screen_y(&d->vp, v.im);
+        dot((int)lroundf(sx), (int)lroundf(sy), 8,
+            rgb(model_color(c->fn.color_index)));
+
+        char lbl[64];
+        char txt[96];
+        fd_cpx_label(v, lbl, sizeof(lbl));
+        snprintf(txt, sizeof(txt), "%s=%s", c->name, lbl);
+        add_tag((int)sx + 7, (int)sy - 18, txt, FD_C_TEXT);
+    }
+}
+
 static void update_card(void)
 {
     fd_curve *c = model_selected_curve();
@@ -758,6 +811,32 @@ static void update_card(void)
     }
     lv_label_set_text(g_card_expr, buf);
 
+    if (model()->settings.complex_plane) {
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) {
+            lv_label_set_text(g_card_err, err.message[0] ? err.message : "表达式无效");
+            lv_obj_remove_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
+            set_feature_line(g_card_roots, "");
+            set_feature_line(g_card_ext, "");
+            g_card_h = 52;
+            lv_obj_set_height(g_card, g_card_h);
+            return;
+        }
+        lv_obj_add_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
+
+        char lbl[64];
+        char txt[96];
+        fd_cpx_label(v, lbl, sizeof(lbl));
+        snprintf(txt, sizeof(txt), "结果：%s", lbl);
+        set_feature_line(g_card_roots, txt);
+        set_feature_line(g_card_ext, "");
+        g_card_h = 70;
+        lv_obj_set_height(g_card, g_card_h);
+        return;
+    }
+
     if (g_plot.error_count > 0 && g_plot.error_msgs && g_plot.error_ids) {
         lv_label_set_text(g_card_err, g_plot.error_msgs[0]);
         lv_obj_remove_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
@@ -775,6 +854,17 @@ static void repaint(void)
 
     fill_bg();
     if (g_numbers) lv_obj_clean(g_numbers);
+
+    if (d->settings.complex_plane) {
+        /* 复平面模式不跑实数采样：每条表达式按复数求值，结果画成一个点。 */
+        draw_grid_and_axes(&d->vp, &d->settings);
+        draw_complex();
+        draw_geo();
+        draw_tool_preview();
+        update_card();
+        if (g_canvas) lv_obj_invalidate(g_canvas);
+        return;
+    }
 
     rebuild_plot();
 
