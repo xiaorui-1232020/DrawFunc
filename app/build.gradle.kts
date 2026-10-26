@@ -62,7 +62,7 @@ android {
 
         ndk {
             // 目标手表是 32 位；带上 arm64 以便在新设备/模拟器上也能跑。
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
     }
 

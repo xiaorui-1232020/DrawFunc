@@ -291,8 +291,7 @@ static void build_slider_row(lv_obj_t *list, fd_slider *s, int content_w)
     lv_obj_set_style_pad_all(sl, 5, LV_PART_KNOB);
     lv_obj_align(sl, LV_ALIGN_LEFT_MID, 22, 0);
 
-    lv_obj_t *play = small_button(row, s->playing ? "停" : "播",
-                                  slider_play_clicked, NULL);
+    lv_obj_t *play = small_button(row, s->playing ? "停" : "播", NULL, NULL);
     lv_obj_set_size(play, 32, 30);
     lv_obj_set_style_pad_hor(play, 0, 0);
     lv_obj_align(play, LV_ALIGN_RIGHT_MID, -36, 0);

@@ -37,8 +37,16 @@ class MainActivity : Activity() {
 
         surfaceView = GraphSurfaceView()
         setContentView(surfaceView)
+        // 触摸模式下也要拿到焦点，否则按键不会走 SurfaceView.onKeyDown。
+        surfaceView.requestFocus()
 
         nativeSetFilesDir(filesDir.absolutePath)
+    }
+
+    override fun onBackPressed() {
+        // 返回键优先交给原生界面导航；只有绘图屏（原生返回 false）才退出应用。
+        if (nativeKey(KeyEvent.KEYCODE_BACK)) return
+        super.onBackPressed()
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
