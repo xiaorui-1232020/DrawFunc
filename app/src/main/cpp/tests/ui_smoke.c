@@ -374,6 +374,13 @@ int main(int argc, char **argv)
         dump("17_editor_upper");
     }
 
+    /* 缩放栏：打开设置后图像屏底部出现 − / 滑轨 / + */
+    model()->settings.show_zoom_bar = true;
+    ui_show(UI_SCR_GRAPH);
+    pump(6);
+    dump("18_graph_zoom_bar");
+    model()->settings.show_zoom_bar = false;
+
     /* PNG 导出（先回到图像屏，导出按模型重画） */
     ui_show(UI_SCR_GRAPH);
     pump(6);

@@ -75,6 +75,8 @@ static void doc_defaults(fd_doc *d)
     d->settings.angle_degrees = false;
     d->settings.quality = FD_QUALITY_HIGH;
     d->settings.crown_zoom = true;
+    d->settings.show_zoom_bar = false;
+    d->settings.show_presets = true;
     d->next_id = 1;
     d->geo_next_id = 1;
     d->selected_id = 0;
@@ -508,13 +510,15 @@ static void serialize_doc(strbuf *sb, const fd_doc *d, const char *title)
     sb_printf(sb, "meta\t");
     sb_field(sb, title ? title : "");
     sb_printf(sb, "\n");
-    sb_printf(sb, "settings\t%d\t%d\t%d\t%d\t%d\t%d\n",
+    sb_printf(sb, "settings\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
               d->settings.show_grid ? 1 : 0,
               d->settings.show_axes ? 1 : 0,
               d->settings.show_numbers ? 1 : 0,
               d->settings.angle_degrees ? 1 : 0,
               d->settings.quality,
-              d->settings.crown_zoom ? 1 : 0);
+              d->settings.crown_zoom ? 1 : 0,
+              d->settings.show_zoom_bar ? 1 : 0,
+              d->settings.show_presets ? 1 : 0);
     sb_printf(sb, "viewport\t%.17g\t%.17g\t%.17g\t%d\n",
               d->vp.center_x, d->vp.center_y, d->vp.units_per_px,
               d->view_initialized ? 1 : 0);
@@ -600,6 +604,9 @@ static bool parse_doc(char *text, fd_doc *out)
             out->settings.angle_degrees = atoi(f[4]) != 0;
             out->settings.quality = atoi(f[5]);
             out->settings.crown_zoom = atoi(f[6]) != 0;
+            /* 第 8、9 个字段是后加的：老存档没有，按各自的默认值处理。 */
+            out->settings.show_zoom_bar = n >= 8 && atoi(f[7]) != 0;
+            out->settings.show_presets = n >= 9 ? atoi(f[8]) != 0 : true;
         } else if (strcmp(f[0], "viewport") == 0 && n >= 5) {
             out->vp.center_x = atof(f[1]);
             out->vp.center_y = atof(f[2]);

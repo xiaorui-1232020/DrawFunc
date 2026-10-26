@@ -101,6 +101,45 @@ static lv_obj_t *small_button(lv_obj_t *parent, const char *text,
     return b;
 }
 
+/* ---- 列表行左滑删除 ---- */
+static lv_coord_t g_swipe_x0;
+static bool g_swipe_tracking;
+
+static void row_swipe_start(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    lv_point_t p;
+    lv_indev_get_point(lv_indev_active(), &p);
+    g_swipe_x0 = p.x;
+    g_swipe_tracking = true;
+}
+
+static void row_swipe_cancel(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    g_swipe_tracking = false;
+}
+
+static void row_swipe_end(lv_event_t *e)
+{
+    if (!g_swipe_tracking) return;
+    g_swipe_tracking = false;
+
+    lv_point_t p;
+    lv_indev_get_point(lv_indev_active(), &p);
+    /* 只认左滑，而且要滑过约 1/3 行宽（466 屏上约 120px）。 */
+    if (g_swipe_x0 - p.x < 120) return;
+
+    lv_obj_t *row = lv_event_get_current_target(e);
+    int id = (int)(intptr_t)lv_obj_get_user_data(row);
+    if (!model_curve(id)) return;
+    model_delete_curve(id);
+    model_sync_sliders();
+    model_checkpoint();
+    ui_toast("已左滑删除");
+    ui_refresh_later();
+}
+
 static void build_row(lv_obj_t *list, fd_curve *c)
 {
     lv_obj_t *row = lv_obj_create(list);
@@ -159,6 +198,11 @@ static void build_row(lv_obj_t *list, fd_curve *c)
     /* 长按直接进属性页 */
     lv_obj_set_user_data(row, (void *)(intptr_t)c->fn.id);
     lv_obj_add_event_cb(row, row_props, LV_EVENT_LONG_PRESSED, NULL);
+
+    /* 左滑删除 */
+    lv_obj_add_event_cb(row, row_swipe_start, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(row, row_swipe_end, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(row, row_swipe_cancel, LV_EVENT_PRESS_LOST, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -325,6 +369,87 @@ static void build_slider_row(lv_obj_t *list, fd_slider *s, int content_w)
 /* 列表                                                                */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* 示例库                                                              */
+/* ------------------------------------------------------------------ */
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+typedef struct {
+    const char *label;
+    fd_plot_mode mode;
+    const char *src1;
+    const char *src2; /**< 参数方程的第二个式子；NULL 表示没有 */
+    double t_max;     /**< > 0 时覆盖默认 t 范围 */
+} preset_def;
+
+static const preset_def k_presets[] = {
+        {"正弦波", FD_PLOT_EXPLICIT, "sin(x)", NULL, 0.0},
+        {"抛物线", FD_PLOT_EXPLICIT, "x^2/4", NULL, 0.0},
+        {"高斯钟形", FD_PLOT_EXPLICIT, "exp(-x^2/2)", NULL, 0.0},
+        {"双曲线一支", FD_PLOT_EXPLICIT, "1/x", NULL, 0.0},
+        {"绝对值", FD_PLOT_EXPLICIT, "|x|-2", NULL, 0.0},
+        {"三次曲线", FD_PLOT_EXPLICIT, "x^3/3-x", NULL, 0.0},
+        {"单位圆", FD_PLOT_IMPLICIT, "x^2+y^2=1", NULL, 0.0},
+        {"双曲线", FD_PLOT_IMPLICIT, "x^2-y^2=1", NULL, 0.0},
+        {"笛卡尔叶", FD_PLOT_IMPLICIT, "x^3+y^3=3xy", NULL, 0.0},
+        {"摆线", FD_PLOT_PARAMETRIC, "t-sin(t)", "1-cos(t)", 6.0 * M_PI},
+};
+
+static void preset_clicked(lv_event_t *e)
+{
+    const preset_def *p = (const preset_def *)lv_event_get_user_data(e);
+    if (!p) return;
+    if (model()->curve_count >= FD_MAX_CURVES) {
+        ui_toast("曲线数量已达上限");
+        return;
+    }
+
+    int id = model_add_curve(p->mode);
+    fd_curve *c = model_curve(id);
+    if (!c) return;
+    snprintf(c->fn.src1, sizeof(c->fn.src1), "%s", p->src1);
+    if (p->src2) snprintf(c->fn.src2, sizeof(c->fn.src2), "%s", p->src2);
+    if (p->t_max > 0.0) {
+        c->fn.t_min = 0.0;
+        c->fn.t_max = p->t_max;
+    }
+    model_sync_sliders();
+    model_checkpoint();
+    ui_toast("已添加示例");
+    ui_refresh_later();
+}
+
+static void build_presets(lv_obj_t *list)
+{
+    lv_obj_t *title = ui_label(list, "示例", FD_C_DIM);
+    lv_obj_set_style_pad_top(title, 8, 0);
+
+    lv_obj_t *grid = lv_obj_create(list);
+    lv_obj_remove_style_all(grid);
+    lv_obj_set_width(grid, LV_PCT(100));
+    lv_obj_set_height(grid, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(grid, 6, 0);
+    lv_obj_set_style_pad_row(grid, 6, 0);
+
+    int content_w = (int)ui_width() - 24;
+    if (content_w < 200) content_w = 200;
+    int btn_w = (content_w - 6) / 2;
+
+    for (size_t i = 0; i < sizeof(k_presets) / sizeof(k_presets[0]); i++) {
+        lv_obj_t *b = small_button(grid, k_presets[i].label, preset_clicked,
+                                   (void *)&k_presets[i]);
+        lv_obj_set_width(b, btn_w);
+        lv_obj_set_height(b, 32);
+        lv_obj_set_style_pad_hor(b, 4, 0);
+    }
+}
+
 lv_obj_t *ui_list_create(lv_obj_t *parent)
 {
     fd_doc *d = model();
@@ -390,6 +515,8 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
             build_slider_row(list, &d->sliders[i], content_w);
         }
     }
+
+    if (d->settings.show_presets) build_presets(list);
 
     lv_obj_t *foot = lv_obj_create(root);
     lv_obj_remove_style_all(foot);

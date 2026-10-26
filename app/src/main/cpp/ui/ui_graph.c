@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "../engine/fd_features.h"
 #include "../engine/plot.h"
 #include "../engine/viewport.h"
 #include "geo.h"
@@ -40,6 +41,14 @@ static lv_obj_t *g_card_dot;
 static lv_obj_t *g_card_name;
 static lv_obj_t *g_card_expr;
 static lv_obj_t *g_card_err;
+static lv_obj_t *g_card_roots;
+static lv_obj_t *g_card_ext;
+static lv_coord_t g_card_h = 52;
+
+/* 底部「− 滑动条 ＋」缩放栏（设置里打开才创建）。 */
+static lv_obj_t *g_zoom_bar;
+static lv_obj_t *g_zoom_slider;
+static float g_zoom_depth; /**< 滑轨当前相对位移，-1..1 */
 
 static uint32_t *g_px;
 static int g_stride_px;
@@ -639,12 +648,90 @@ static void draw_tool_preview(void)
 }
 
 
+static void set_feature_line(lv_obj_t *label, const char *text)
+{
+    if (!label) return;
+    if (text && text[0]) {
+        lv_label_set_text(label, text);
+        lv_obj_remove_flag(label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/**
+ * 信息卡的两行特征：零点、极值（没有极值时有 y 截距就显示截距）。
+ * 只对显函数算 —— 极坐标/参数/隐函数没有「零点」这个概念。
+ */
+static void update_features(const fd_curve *c)
+{
+    char roots_txt[96] = "";
+    char ext_txt[96] = "";
+
+    if (c && c->fn.mode == FD_PLOT_EXPLICIT) {
+        char body[FD_SRC_CAP];
+        fd_expr_strip_explicit_prefix(c->fn.src1, body, sizeof(body));
+        if (body[0]) {
+            double params[4];
+            model_param_values(params);
+            fd_param ps[4];
+            static const char *names[4] = {"a", "b", "c", "d"};
+            for (int i = 0; i < 4; i++) {
+                ps[i].name = names[i];
+                ps[i].value = params[i];
+            }
+            bool deg = c->fn.degrees < 0 ? model()->settings.angle_degrees
+                                         : c->fn.degrees != 0;
+            const char *vars[1] = {"x"};
+            fd_expr_error err;
+            memset(&err, 0, sizeof(err));
+            fd_expr *e = fd_expr_compile(body, vars, 1, deg, ps, 4, &err);
+            if (e) {
+                fd_features f;
+                memset(&f, 0, sizeof(f));
+                fd_features_analyze(e, fd_vp_world_left(&model()->vp),
+                                    fd_vp_world_right(&model()->vp), 3, &f);
+
+                if (f.root_count > 0) {
+                    int n = snprintf(roots_txt, sizeof(roots_txt), "零点：");
+                    for (int i = 0; i < f.root_count; i++) {
+                        int left = (int)sizeof(roots_txt) - n;
+                        if (left < 16) break;
+                        n += snprintf(roots_txt + n, (size_t)left, i ? " %.3g" : "%.3g",
+                                      f.roots[i]);
+                    }
+                }
+                if (f.extrema_count > 0) {
+                    int n = snprintf(ext_txt, sizeof(ext_txt), "极值：");
+                    for (int i = 0; i < f.extrema_count && i < 2; i++) {
+                        int left = (int)sizeof(ext_txt) - n;
+                        if (left < 24) break;
+                        n += snprintf(ext_txt + n, (size_t)left, i ? " (%.3g,%.3g)" : "(%.3g,%.3g)",
+                                      f.extrema[i].x, f.extrema[i].y);
+                    }
+                } else if (f.has_y_intercept) {
+                    snprintf(ext_txt, sizeof(ext_txt), "y 截距：%.3g", f.y_intercept);
+                }
+                fd_expr_free(e);
+            }
+        }
+    }
+
+    set_feature_line(g_card_roots, roots_txt);
+    set_feature_line(g_card_ext, ext_txt);
+
+    int lines = (roots_txt[0] ? 1 : 0) + (ext_txt[0] ? 1 : 0);
+    g_card_h = (lv_coord_t)(52 + lines * 18);
+    if (g_card) lv_obj_set_height(g_card, g_card_h);
+}
+
 static void update_card(void)
 {
     fd_curve *c = model_selected_curve();
     if (!g_card) return;
     if (!c) {
         lv_obj_add_flag(g_card, LV_OBJ_FLAG_HIDDEN);
+        g_card_h = 52;
         return;
     }
     lv_obj_remove_flag(g_card, LV_OBJ_FLAG_HIDDEN);
@@ -665,6 +752,8 @@ static void update_card(void)
     } else {
         lv_obj_add_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
     }
+
+    update_features(c);
 }
 
 static void repaint(void)
@@ -711,12 +800,13 @@ static int hit_test(float x, float y)
     return found;
 }
 
-/** 顶部按钮条 / 工具提示条 / 底部信息卡所占的区域不参与手势，避免误触。 */
+/** 顶部按钮条 / 工具提示条 / 底部信息卡 + 缩放栏所占的区域不参与手势，避免误触。 */
 static bool in_ui_band(float y)
 {
     if (y < 56.0f) return true;
     if (g_tool != FD_TOOL_MOVE && y < 96.0f) return true;
-    if (g_card && y > (float)(g_h - 92)) return true;
+    if (g_card && y > (float)(g_h - 16 - g_card_h)) return true;
+    if (g_zoom_bar && y > (float)(g_h - 52)) return true;
     return false;
 }
 
@@ -1014,6 +1104,11 @@ static void tool_commit(void)
             break;
         }
         case FD_TOOL_ANGLE: {
+            /* 和旧版一致：三个点量角时，先按线段规则建出两条边（自动命名），
+             * 角度对象本身只保存顶点和两条边的方向。 */
+            add_line_geo(FD_GEO_SEGMENT, a->xy, b->xy);
+            add_line_geo(FD_GEO_SEGMENT, a->xy, c->xy);
+
             fd_geo *g = model_add_geo(FD_GEO_ANGLE);
             if (g) {
                 g->npts = 3;
@@ -1429,6 +1524,11 @@ void ui_graph_detach(void)
     g_card_name = NULL;
     g_card_expr = NULL;
     g_card_err = NULL;
+    g_card_roots = NULL;
+    g_card_ext = NULL;
+    g_zoom_bar = NULL;
+    g_zoom_slider = NULL;
+    g_zoom_depth = 0.0f;
     g_hint = NULL;
     g_hint_label = NULL;
     g_panel = NULL;
@@ -1725,6 +1825,71 @@ static void build_toolbar(lv_obj_t *parent)
     lv_obj_add_event_cb(tools, tools_clicked, LV_EVENT_CLICKED, NULL);
 }
 
+static void zoom_apply(double factor)
+{
+    if (g_w <= 0 || g_h <= 0) return;
+    model_zoom(factor, g_w / 2.0, g_h / 2.0);
+    repaint();
+}
+
+/** 按键：固定一大步（1.5 倍），按完滑轨回中点。 */
+static void zoom_step_clicked(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    int dir = (int)(intptr_t)lv_obj_get_user_data(btn);
+    g_zoom_depth = 0.0f;
+    if (g_zoom_slider) lv_slider_set_value(g_zoom_slider, 50, LV_ANIM_OFF);
+    zoom_apply(dir > 0 ? 1.5 : 1.0 / 1.5);
+}
+
+/** 滑轨：相对量，只表示「相对上次位置的偏移」，最多一步 ±1.5 倍。 */
+static void zoom_slider_changed(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    float depth = ((float)lv_slider_get_value(sl) - 50.0f) / 50.0f;
+    double factor = pow(1.5, (double)(depth - g_zoom_depth));
+    g_zoom_depth = depth;
+    if (fabs(factor - 1.0) > 1e-9) zoom_apply(factor);
+}
+
+static void build_zoom_bar(lv_obj_t *parent)
+{
+    if (!model()->settings.show_zoom_bar) return;
+
+    lv_obj_t *bar = lv_obj_create(parent);
+    g_zoom_bar = bar;
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, 300, 44);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bar, 8, 0);
+
+    lv_obj_t *minus = ui_button(bar, "−", zoom_step_clicked);
+    lv_obj_set_size(minus, 44, 36);
+    lv_obj_set_user_data(minus, (void *)(intptr_t)-1);
+
+    lv_obj_t *sl = lv_slider_create(bar);
+    g_zoom_slider = sl;
+    lv_obj_set_size(sl, 170, 8);
+    lv_slider_set_range(sl, 0, 100);
+    lv_slider_set_value(sl, 50, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(sl, lv_color_hex(0x2A3542), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sl, lv_color_hex(FD_C_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(sl, 6, LV_PART_KNOB);
+    lv_obj_add_event_cb(sl, zoom_slider_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *plus = ui_button(bar, "+", zoom_step_clicked);
+    lv_obj_set_size(plus, 44, 36);
+    lv_obj_set_user_data(plus, (void *)(intptr_t)1);
+
+    g_zoom_depth = 0.0f;
+}
+
 static void build_card(lv_obj_t *parent)
 {
     lv_obj_t *card = lv_obj_create(parent);
@@ -1736,7 +1901,9 @@ static void build_card(lv_obj_t *parent)
     lv_obj_set_style_radius(card, 16, 0);
     lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0, -16);
+    /* 打开缩放栏时信息卡上移，给底部那一栏让位。 */
+    lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0,
+                 model()->settings.show_zoom_bar ? -62 : -16);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     ui_set_click(card, card_clicked);
 
@@ -1768,6 +1935,21 @@ static void build_card(lv_obj_t *parent)
     lv_obj_set_style_text_font(g_card_err, &font_cn_16, 0);
     lv_obj_set_style_text_color(g_card_err, lv_color_hex(FD_C_DANGER), 0);
     lv_obj_align(g_card_err, LV_ALIGN_TOP_LEFT, 30, 28);
+
+    /* 零点 / 极值两行，有内容才显示（卡片高度随之变化）。 */
+    g_card_roots = lv_label_create(card);
+    lv_label_set_text(g_card_roots, "");
+    lv_obj_add_flag(g_card_roots, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(g_card_roots, &font_cn_14, 0);
+    lv_obj_set_style_text_color(g_card_roots, lv_color_hex(FD_C_TEXT), 0);
+    lv_obj_align(g_card_roots, LV_ALIGN_TOP_LEFT, 30, 46);
+
+    g_card_ext = lv_label_create(card);
+    lv_label_set_text(g_card_ext, "");
+    lv_obj_add_flag(g_card_ext, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(g_card_ext, &font_cn_14, 0);
+    lv_obj_set_style_text_color(g_card_ext, lv_color_hex(FD_C_DIM), 0);
+    lv_obj_align(g_card_ext, LV_ALIGN_TOP_LEFT, 30, 64);
 }
 
 static void ensure_buffer(int w, int h)
@@ -1825,6 +2007,7 @@ lv_obj_t *ui_graph_create(lv_obj_t *parent)
     lv_obj_remove_flag(g_numbers, LV_OBJ_FLAG_CLICKABLE);
 
     build_toolbar(g_root);
+    build_zoom_bar(g_root);
     build_card(g_root);
     build_hint(g_root);
     /* 工具面板是全屏浮层，最后建才能盖在其它控件之上。 */

@@ -46,6 +46,21 @@ static void crown_changed(lv_event_t *e)
     model_checkpoint();
 }
 
+static void zoom_bar_changed(lv_event_t *e)
+{
+    model()->settings.show_zoom_bar =
+            lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    model_checkpoint();
+    ui_graph_invalidate();
+}
+
+static void presets_changed(lv_event_t *e)
+{
+    model()->settings.show_presets =
+            lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    model_checkpoint();
+}
+
 static void quality_clicked(lv_event_t *e)
 {
     lv_obj_t *btn = lv_event_get_current_target(e);
@@ -129,6 +144,8 @@ lv_obj_t *ui_settings_create(lv_obj_t *parent)
     ui_switch_row(root, "显示刻度数值", st->show_numbers, numbers_changed);
     ui_switch_row(root, "三角函数按角度", st->angle_degrees, degrees_changed);
     ui_switch_row(root, "表冠缩放", st->crown_zoom, crown_changed);
+    ui_switch_row(root, "按键缩放栏", st->show_zoom_bar, zoom_bar_changed);
+    ui_switch_row(root, "函数示例", st->show_presets, presets_changed);
 
     lv_obj_t *qrow = lv_obj_create(root);
     lv_obj_remove_style_all(qrow);
