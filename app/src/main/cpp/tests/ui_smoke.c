@@ -388,6 +388,14 @@ int main(int argc, char **argv)
     ui_show(UI_SCR_GRAPH);
     pump(4);
 
+    /* 导出 PNG 的命名对话框（文本输入 + 键盘） */
+    ui_show(UI_SCR_ARCHIVE);
+    pump(4);
+    ui_archive_open_export_dialog();
+    pump(4);
+    dump("21_export_dialog");
+    ui_archive_close_dialog();
+
     /* 复平面：一条复数表达式，结果画成点 */
     {
         int id = model_add_curve(FD_PLOT_EXPLICIT);

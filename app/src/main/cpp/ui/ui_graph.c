@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 #include "../engine/cmath.h"
@@ -1649,23 +1650,40 @@ void ui_graph_detach(void)
 
 static void sanitize(const char *title, char *out, size_t cap)
 {
+    char tmp[80];
     size_t n = 0;
+
     if (title) {
-        for (const char *p = title; *p && n + 1 < cap; p++) {
+        for (const char *p = title; *p && n + 1 < sizeof(tmp); p++) {
             unsigned char ch = (unsigned char)*p;
-            if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') ||
-                (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_') {
-                out[n++] = (char)ch;
-            } else if (ch >= 0x80) {
-                /* 中文标题：跳过，用时间戳兜底。 */
-                continue;
+            if (ch < 0x20 || ch == 0x7F) {
+                tmp[n++] = '_';
+            } else if (ch < 0x80 && strchr("\\/:*?\"<>|", (int)ch)) {
+                tmp[n++] = '_';
+            } else {
+                tmp[n++] = (char)ch; /* 中文等 UTF-8 字节原样保留 */
             }
         }
     }
-    if (n == 0) {
-        snprintf(out, cap, "graph");
+    tmp[n] = '\0';
+
+    char *s = tmp;
+    while (*s == ' ' || *s == '.' || *s == '_') s++;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '.' || e[-1] == '_')) *--e = '\0';
+
+    if (*s == '\0') {
+        snprintf(out, cap, "graph.png");
+        return;
+    }
+
+    if (strlen(s) > (cap > 5 ? cap - 5 : strlen(s))) s[cap - 5] = '\0';
+
+    size_t len = strlen(s);
+    if (len >= 4 && strcasecmp(s + len - 4, ".png") == 0) {
+        snprintf(out, cap, "%s", s);
     } else {
-        out[n] = '\0';
+        snprintf(out, cap, "%s.png", s);
     }
 }
 
@@ -1707,7 +1725,7 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap)
 
     /* lodepng 走 LVGL 的 stdio 文件系统驱动，盘符是 'A'。 */
     char fs_path[768];
-    snprintf(fs_path, sizeof(fs_path), "%s/archives/%s.png", dir, name);
+    snprintf(fs_path, sizeof(fs_path), "%s/archives/%s", dir, name);
     snprintf(path, sizeof(path), "A:%s", fs_path);
     unsigned err = lodepng_encode32_file(path, rgba, (unsigned)g_w, (unsigned)g_h);
     free(rgba);

@@ -78,6 +78,9 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
 void ui_graph_crown(float delta);
 void ui_graph_invalidate(void);
 bool ui_graph_export_png(const char *title, char *out_path, size_t cap);
+/** 存档页的「导出 PNG」命名对话框（冒烟测试也会直接调）。 */
+void ui_archive_open_export_dialog(void);
+void ui_archive_close_dialog(void);
 /** 切屏前调用：LVGL 对象会被销毁，这里把它们置空，但保留像素缓冲区。 */
 void ui_graph_detach(void);
 
