@@ -381,6 +381,13 @@ int main(int argc, char **argv)
     dump("18_graph_zoom_bar");
     model()->settings.show_zoom_bar = false;
 
+    /* 几何对象在列表里的行（名字 + 类型/度量值 + 显隐 + 删除） */
+    ui_show(UI_SCR_LIST);
+    pump(4);
+    dump("19_list_geo");
+    ui_show(UI_SCR_GRAPH);
+    pump(4);
+
     /* PNG 导出（先回到图像屏，导出按模型重画） */
     ui_show(UI_SCR_GRAPH);
     pump(6);

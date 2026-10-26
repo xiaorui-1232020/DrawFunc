@@ -450,6 +450,116 @@ static void build_presets(lv_obj_t *list)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* 几何对象行                                                          */
+/* ------------------------------------------------------------------ */
+
+static const char *geo_type_label(fd_geo_kind k)
+{
+    switch (k) {
+        case FD_GEO_POINT: return "点";
+        case FD_GEO_SEGMENT: return "线段";
+        case FD_GEO_LINE: return "直线";
+        case FD_GEO_RAY: return "射线";
+        case FD_GEO_ANGLE: return "角";
+        case FD_GEO_POLYGON: return "面积";
+        case FD_GEO_DISTANCE: return "距离";
+        default: return "对象";
+    }
+}
+
+static void geo_visible_clicked(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    int id = (int)(intptr_t)lv_obj_get_user_data(btn);
+    fd_geo *g = model_geo(id);
+    if (!g) return;
+    g->visible = !g->visible;
+    model_checkpoint();
+    ui_refresh_later();
+}
+
+static void geo_delete_clicked(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    int id = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (!model_geo(id)) return;
+    model_delete_geo(id);
+    model_checkpoint();
+    ui_toast("已删除");
+    ui_refresh_later();
+}
+
+static void geo_info_text(const fd_geo *g, char *buf, size_t cap)
+{
+    switch (g->kind) {
+        case FD_GEO_DISTANCE:
+            snprintf(buf, cap, "距离 %.3g", geo_distance(g->p[0], g->p[1]));
+            break;
+        case FD_GEO_ANGLE:
+            snprintf(buf, cap, "角 %.1f°", geo_angle_deg(g->p[0], g->p[1], g->p[2]));
+            break;
+        case FD_GEO_POLYGON:
+            snprintf(buf, cap, "面积 %.3g",
+                     fabs(geo_polygon_area((const double(*)[2])g->p, g->npts)));
+            break;
+        default:
+            snprintf(buf, cap, "%s", geo_type_label(g->kind));
+            break;
+    }
+}
+
+static void build_geo_row(lv_obj_t *list, const fd_geo *g)
+{
+    lv_obj_t *row = lv_obj_create(list);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, 46);
+    lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(row, 12, 0);
+    lv_obj_set_style_pad_hor(row, 10, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *dot = lv_obj_create(row);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, 9, 9);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(model_color(g->color_index)), 0);
+    lv_obj_set_style_bg_opa(dot, g->visible ? LV_OPA_COVER : LV_OPA_30, 0);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *name = lv_label_create(row);
+    lv_label_set_text(name, g->name);
+    lv_obj_set_style_text_font(name, &font_cn_16, 0);
+    lv_obj_set_style_text_color(name,
+                                lv_color_hex(g->visible ? FD_C_TEXT : FD_C_DIM), 0);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 18, 0);
+
+    char info[40];
+    geo_info_text(g, info, sizeof(info));
+    lv_obj_t *desc = lv_label_create(row);
+    lv_label_set_text(desc, info);
+    lv_obj_set_style_text_font(desc, &font_cn_14, 0);
+    lv_obj_set_style_text_color(desc, lv_color_hex(FD_C_DIM), 0);
+    lv_obj_align(desc, LV_ALIGN_LEFT_MID, 58, 0);
+
+    lv_obj_t *vis = small_button(row, g->visible ? "隐" : "显", geo_visible_clicked,
+                                 (void *)(intptr_t)g->id);
+    lv_obj_set_size(vis, 48, 30);
+    lv_obj_set_style_pad_hor(vis, 0, 0);
+    lv_obj_align(vis, LV_ALIGN_RIGHT_MID, -58, 0);
+
+    lv_obj_t *del = small_button(row, "删", geo_delete_clicked,
+                                 (void *)(intptr_t)g->id);
+    lv_obj_set_size(del, 30, 30);
+    lv_obj_set_style_pad_hor(del, 0, 0);
+    lv_obj_set_style_bg_color(del, lv_color_hex(0x3A2024), 0);
+    lv_obj_t *dl = lv_obj_get_child(del, 0);
+    if (dl) lv_obj_set_style_text_color(dl, lv_color_hex(FD_C_DANGER), 0);
+    lv_obj_align(del, LV_ALIGN_RIGHT_MID, 0, 0);
+}
+
 lv_obj_t *ui_list_create(lv_obj_t *parent)
 {
     fd_doc *d = model();
@@ -503,6 +613,14 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
 
     for (int i = 0; i < d->curve_count; i++) {
         build_row(list, &d->curves[i]);
+    }
+
+    if (d->geo_count > 0) {
+        lv_obj_t *sep = ui_label(list, "图形", FD_C_DIM);
+        lv_obj_set_style_pad_top(sep, 6, 0);
+        for (int i = 0; i < d->geo_count; i++) {
+            build_geo_row(list, &d->geos[i]);
+        }
     }
 
     if (d->slider_count > 0) {

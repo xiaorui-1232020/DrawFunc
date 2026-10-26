@@ -283,6 +283,33 @@ static void geo_auto_point_name(char *out, size_t cap)
     snprintf(out, cap, "P");
 }
 
+/** 非点对象（线段/角/距离/面积…）的名字：小写字母，跳过变量名与参数名。 */
+static void geo_auto_scalar_name(char *out, size_t cap)
+{
+    static const char *reserved = "abcdxytei";
+    for (int i = 0; i < 26 * 99; i++) {
+        char buf[12];
+        if (i < 26) {
+            snprintf(buf, sizeof(buf), "%c", 'a' + i);
+            if (strchr(reserved, buf[0])) continue;
+        } else {
+            snprintf(buf, sizeof(buf), "%c%d", 'a' + (i % 26), i / 26);
+        }
+        bool used = false;
+        for (int k = 0; k < g_doc.geo_count; k++) {
+            if (strcmp(g_doc.geos[k].name, buf) == 0) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            snprintf(out, cap, "%s", buf);
+            return;
+        }
+    }
+    snprintf(out, cap, "s");
+}
+
 fd_geo *model_add_geo(fd_geo_kind kind)
 {
     if (g_doc.geo_count >= FD_GEO_MAX) return NULL;
@@ -291,7 +318,11 @@ fd_geo *model_add_geo(fd_geo_kind kind)
     g->id = g_doc.geo_next_id++;
     g->kind = kind;
     g->visible = true;
-    if (kind == FD_GEO_POINT) geo_auto_point_name(g->name, sizeof(g->name));
+    if (kind == FD_GEO_POINT) {
+        geo_auto_point_name(g->name, sizeof(g->name));
+    } else {
+        geo_auto_scalar_name(g->name, sizeof(g->name));
+    }
     return g;
 }
 
