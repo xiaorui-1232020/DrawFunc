@@ -15,6 +15,7 @@
 #include "../engine/fd_features.h"
 #include "../engine/plot.h"
 #include "../engine/viewport.h"
+#include "../src/subst.h"
 #include "geo.h"
 #include "model.h"
 
@@ -270,7 +271,15 @@ static void rebuild_plot(void)
     fd_function fns[FD_MAX_CURVES];
     int n = 0;
     for (int i = 0; i < d->curve_count && n < FD_MAX_CURVES; i++) {
-        fns[n++] = d->curves[i].fn;
+        fns[n] = d->curves[i].fn;
+        /* x(A)/y(A) 与标量名在送进引擎前换成数值字面量（原文本不变）。 */
+        char sub1[FD_SRC_CAP];
+        char sub2[FD_SRC_CAP];
+        fd_subst_geo(fns[n].src1, sub1, sizeof(sub1));
+        fd_subst_geo(fns[n].src2, sub2, sizeof(sub2));
+        snprintf(fns[n].src1, sizeof(fns[n].src1), "%s", sub1);
+        snprintf(fns[n].src2, sizeof(fns[n].src2), "%s", sub2);
+        n++;
     }
 
     double params[4];
@@ -672,6 +681,9 @@ static void update_features(const fd_curve *c)
         char body[FD_SRC_CAP];
         fd_expr_strip_explicit_prefix(c->fn.src1, body, sizeof(body));
         if (body[0]) {
+            char sub[FD_SRC_CAP];
+            fd_subst_geo(body, sub, sizeof(sub));
+
             double params[4];
             model_param_values(params);
             fd_param ps[4];
@@ -685,7 +697,7 @@ static void update_features(const fd_curve *c)
             const char *vars[1] = {"x"};
             fd_expr_error err;
             memset(&err, 0, sizeof(err));
-            fd_expr *e = fd_expr_compile(body, vars, 1, deg, ps, 4, &err);
+            fd_expr *e = fd_expr_compile(sub, vars, 1, deg, ps, 4, &err);
             if (e) {
                 fd_features f;
                 memset(&f, 0, sizeof(f));

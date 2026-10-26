@@ -103,12 +103,13 @@ app/src/main/
     │   ├── ui_editor.c             编辑器 + 四页自绘键盘 + 字母表
     │   ├── ui_props.c              颜色/线宽/线型/显隐/角度 + 撤销/重做/删除
     │   ├── ui_archive.c            存档列表、载入、删除、导出 PNG
-    │   ├── ui_settings.c           网格/坐标轴/刻度/角度/表冠/采样质量
+    │   ├── ui_settings.c           网格/坐标轴/刻度/角度/表冠/缩放栏/示例/采样质量
     │   ├── ui_about.c              关于页
     │   └── font_cn_14/16/20.c      中文字库（各约 2.6/3.0/4.0 MB 源码）
     ├── tests/                      主机端测试（1628 行）
     │   ├── expr_test.c             + build_expr.sh
     │   ├── fd_features_test.c      + build_fd_features.sh
+    │   ├── subst_test.c            + build_subst.sh
     │   └── ui_smoke.c              + build_ui_host.sh（内存显示 + 导出 PNG）
     └── third_party/lvgl/           LVGL 9.2.2（25 MB，已删 .git/docs/demos/examples/tests）
 ```
@@ -195,7 +196,7 @@ powershell -ExecutionPolicy Bypass -File tools\install-to-watch.ps1
 
 ## 五、主机端验证（不需要 Gradle、不需要模拟器）
 
-三个脚本都是普通 C11 程序，Linux / macOS 上直接跑：
+四个脚本都是普通 C11 程序，Linux / macOS 上直接跑：
 
 ```bash
 # 1) 表达式引擎：661 项断言
@@ -204,11 +205,14 @@ bash app/src/main/cpp/tests/build_expr.sh
 # 2) 特征点分析：40 项断言（零点/极值/截距/相切零点）
 bash app/src/main/cpp/tests/build_fd_features.sh
 
-# 3) 界面冒烟：内存显示 + 合成触摸，逐屏渲染并导出 PNG
+# 3) 几何量代入：x(A)/y(A) 与标量名替换
+bash app/src/main/cpp/tests/build_subst.sh
+
+# 4) 界面冒烟：内存显示 + 合成触摸，逐屏渲染并导出 PNG
 bash app/src/main/cpp/tests/build_ui_host.sh /tmp/fd_ui_shots
 ```
 
-三个脚本都支持：
+四个脚本都支持：
 
 - `SANITIZE=1` 开启 ASan + UBSan；
 - `OUT_DIR=...` 指定中间产物目录；
@@ -372,6 +376,16 @@ node node_modules/lv_font_conv/lv_font_conv.js \
 
 隐函数额外支持最外层 `左边=右边`，编译时移项成 `(左边)-(右边)`。
 
+几何量代入（和旧版一致，替换发生在送进引擎之前，原文本不变）：
+
+```
+x(A)      点 A 的横坐标（数值常量）
+y( A )    括号内外都容忍空格
+2x(A)     隐式乘法，等价于 2(1.5)
+f         距离 / 角 / 面积对象的名字，取当前数值
+x(B)      B 不是已知点 → 原样保留，由引擎报错
+```
+
 ---
 
 ## 九、关键实现
@@ -415,7 +429,6 @@ node node_modules/lv_font_conv/lv_font_conv.js \
 |---|---|
 | **复平面模式未移植** | 旧版有一个「设置 → 坐标系 → 复平面」模式（`ComplexMath.kt` 1056 行：复数类型 + 复数表达式求值，复平面里只有描点和数值运算，结果是画成一个点）。C/LVGL 侧**没有**对应实现，是剩余差异里最大的一块。 |
 | 没有坐标系切换 | 设置里没有「笛卡尔 / 极坐标」切换，极坐标与参数方程只能在新建曲线时按模式选。 |
-| 坐标 / 标量不能代入 | 旧版支持 `x(A)`、`y(A)` 取点坐标，距离/角度/面积对象名（如 `f`）也能当数值写进表达式；C 版引擎只认变量、参数、常量、函数。 |
 | 几何对象只有列表行 | 列表里已经有「图形」行（名字 + 类型/度量值 + 显隐 + 删除），但没有旧版的详情页、改名和属性卡；点的名字是 A/B/C…，其余对象是 f/g/h…（小写，跳过变量名与参数名）。 |
 | 保存命名 / 导出位置 | 没有保存命名对话框；PNG 只写应用私有目录 `archives/`，没有走相册或下载目录。 |
 | 系统手势 / 首次确认框 | 旧版的「屏蔽系统手势」开关、首次切坐标系与首次用工具的确认框都未实现。 |

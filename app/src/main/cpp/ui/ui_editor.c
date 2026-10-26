@@ -12,6 +12,7 @@
 #include "expr.h"
 #include "model.h"
 #include "plot.h"
+#include "subst.h"
 
 #define FD_EDITOR_COLS 5
 #define FD_ALPHA_COLS 6
@@ -91,6 +92,11 @@ static const key_def *page_keys(int page)
 static bool validate_text(const char *src, fd_plot_mode mode, bool degrees,
                           char *msg, size_t cap)
 {
+    /* 先做几何量替换：x(A)/y(A) 和距离/角/面积对象名换成数值字面量。 */
+    char subst[FD_SRC_CAP];
+    fd_subst_geo(src, subst, sizeof(subst));
+    src = subst;
+
     double params[4];
     model_param_values(params);
     fd_param ps[4];

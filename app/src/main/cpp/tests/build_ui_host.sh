@@ -33,7 +33,7 @@ mkdir -p "${OBJ}" "${SHOT_DIR}"
 shopt -s globstar nullglob
 LV_SOURCES=("${LVGL_DIR}/src/"**/*.c)
 APP_SOURCES=("${CPP_DIR}/engine/"*.c "${CPP_DIR}/src/model.c" \
-             "${CPP_DIR}/src/geo.c" \
+             "${CPP_DIR}/src/geo.c" "${CPP_DIR}/src/subst.c" \
              "${CPP_DIR}/src/app.c" "${CPP_DIR}/ui/"*.c "${SCRIPT_DIR}/ui_smoke.c")
 
 set -e
