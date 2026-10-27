@@ -450,17 +450,24 @@ static fd_cpx_node *parse_primary(parser *ps)
                 advance(ps);
                 b = parse_sum(ps);
             }
-            if (!expect(ps, T_RP, "右括号")) return NULL;
+            if (!expect(ps, T_RP, "右括号")) {
+                fd_cpx_free(a);
+                fd_cpx_free(b);
+                return NULL;
+            }
             if (b && max_args < 2) {
                 char msg[96];
                 snprintf(msg, sizeof(msg), "'%s' 只接受 1 个参数", name);
                 fail(&ps->lx, pos, msg);
+                fd_cpx_free(a);
+                fd_cpx_free(b);
                 return NULL;
             }
             if (!b && min_args > 1) {
                 char msg[96];
                 snprintf(msg, sizeof(msg), "'%s' 需要 2 个参数", name);
                 fail(&ps->lx, pos, msg);
+                fd_cpx_free(a);
                 return NULL;
             }
             if (b && id == F_LOG) {
@@ -516,7 +523,10 @@ static fd_cpx_node *parse_power(parser *ps)
     if (!base) return NULL;
     if (accept_op(ps, '^')) {
         fd_cpx_node *rhs = parse_power(ps);
-        if (!rhs) return NULL;
+        if (!rhs) {
+            fd_cpx_free(base);
+            return NULL;
+        }
         fd_cpx_node *n = node_new(N_POW);
         n->a = base;
         n->b = rhs;
@@ -560,21 +570,30 @@ static fd_cpx_node *parse_product(parser *ps)
     for (;;) {
         if (accept_op(ps, '*')) {
             fd_cpx_node *right = parse_unary(ps);
-            if (!right) return NULL;
+            if (!right) {
+                fd_cpx_free(left);
+                return NULL;
+            }
             fd_cpx_node *n = node_new(N_MUL);
             n->a = left;
             n->b = right;
             left = n;
         } else if (accept_op(ps, '/')) {
             fd_cpx_node *right = parse_unary(ps);
-            if (!right) return NULL;
+            if (!right) {
+                fd_cpx_free(left);
+                return NULL;
+            }
             fd_cpx_node *n = node_new(N_DIV);
             n->a = left;
             n->b = right;
             left = n;
         } else if (starts_operand(ps)) {
             fd_cpx_node *right = parse_unary(ps);
-            if (!right) return NULL;
+            if (!right) {
+                fd_cpx_free(left);
+                return NULL;
+            }
             fd_cpx_node *n = node_new(N_MUL);
             n->a = left;
             n->b = right;
@@ -594,14 +613,20 @@ static fd_cpx_node *parse_sum(parser *ps)
     for (;;) {
         if (accept_op(ps, '+')) {
             fd_cpx_node *right = parse_product(ps);
-            if (!right) return NULL;
+            if (!right) {
+                fd_cpx_free(left);
+                return NULL;
+            }
             fd_cpx_node *n = node_new(N_ADD);
             n->a = left;
             n->b = right;
             left = n;
         } else if (accept_op(ps, '-')) {
             fd_cpx_node *right = parse_product(ps);
-            if (!right) return NULL;
+            if (!right) {
+                fd_cpx_free(left);
+                return NULL;
+            }
             fd_cpx_node *n = node_new(N_SUB);
             n->a = left;
             n->b = right;

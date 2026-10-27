@@ -123,6 +123,10 @@ int main(void)
     error_case("sin(1,2)");
     error_case("(1+2i");
     error_case("1 2 +");
+    /* 下面三个覆盖出错时释放已解析子树的路径（ASan 下可查泄漏）。 */
+    error_case("2^");
+    error_case("sin(1");
+    error_case("pow(1)");
 
     if (g_fail == 0) {
         printf("cmath: all assertions passed\n");
