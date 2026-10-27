@@ -4,7 +4,7 @@
 界面不再是 Jetpack Compose，而是**整屏由 C + LVGL 绘制**，Android 侧只剩一个
 `SurfaceView` 宿主。数学引擎、文档模型、界面、绘制全部在 NDK 里。
 
-当前代码在 **`lvgl` 分支**（`main` 保留旧的 Compose 实现）。
+当前开发分支为 **`lvgl-main-parity`**；`lvgl` 是合并基线，`main` 保留旧的 Compose 实现。
 
 ```
 y = f(x)       显函数
@@ -19,18 +19,19 @@ F(x, y) = 0    隐函数（marching squares）
 
 | 产物 | 大小 | 说明 |
 |---|---|---|
-| `app/build/outputs/apk/debug/app-debug.apk` | **9,619,159 B（≈9.2 MiB）** | 含两个 ABI 的 `libfunctiondrawer.so` |
-| `app/build/outputs/apk/release/app-release.apk` | **4,475,883 B（≈4.3 MiB）** | 已配置 release 签名，v1 + v2 + v3 三签（见第四节） |
+| `app/build/outputs/apk/debug/app-debug.apk` | **8,889,748 B（≈8.5 MiB）** | 含 armeabi-v7a / arm64-v8a / x86_64 三个 ABI |
+| `app/build/outputs/apk/release/app-universal-release*.apk` 或 `app-release*.apk` | **6,888,504 B（≈6.6 MiB）** | R8 + 资源压缩，含三个 ABI；`*` 为 `-unsigned`（无签名材料时） |
+| `app-<abi>-release*.apk`（`-PabiSplits`） | **2,132,891–2,481,046 B（≈2.0–2.4 MiB）** | 单 ABI 包，另产出 universal 包 |
 
 已验证：
 
 - `./gradlew :app:assembleDebug :app:assembleRelease` → **BUILD SUCCESSFUL**；
 - 表达式引擎主机测试 **661 项，0 失败**；
 - 特征点分析主机测试 **40 项，0 失败**（另跑过 ASan/UBSan）；
-- 界面冒烟测试：**7 个屏幕全部渲染成功，导出 17 张 PNG**，几何作图 / 存档往返 / 字母键盘路径均走通。
+- 界面冒烟测试：**7 个屏幕全部渲染成功，导出 17 张 PNG**，几何作图 / 存档往返 / 字母键盘路径均走通；
+- Android 9 x86_64 模拟器（TCG，无 KVM）回归：启动、编辑器、列表/参数播放、设置、存档、几何工具、双指缩放、系统返回键均通过。
 
-**尚未在真表上运行过**（本次开发环境无 `/dev/kvm`、无 adb）。界面与交互已在主机端
-用内存显示 + 合成触摸事件验证，但表冠、真实触摸采样率、GPU/内存压力仍需真机确认。
+**尚未在真表上运行过**：表冠、真实触摸采样率、GPU/内存压力仍需真机确认。
 
 版本号：`versionName 1.1` / `versionCode 3`，`minSdk 24` / `targetSdk 34` / `compileSdk 34`。
 
@@ -125,7 +126,7 @@ app/src/main/
 
 | 组件 | 版本 / 位置 | 说明 |
 |---|---|---|
-| JDK | 17 及以上 | AGP 要求 17+；本沙箱默认的 JDK 25 已验证可构建 |
+| JDK | 17 | AGP 要求 17+；Gradle 8.7 不支持 JDK 25，沙箱里用 JDK 17 构建 |
 | Android SDK | `platforms;android-34`、`build-tools;34.0.0` | `compileSdk 34` |
 | NDK | `27.2.12479018` | `app/build.gradle.kts` 里锁定 |
 | CMake | `3.22.1` | 同上 |
@@ -139,20 +140,36 @@ export GRADLE_USER_HOME=/workspace/.toolchain/gradle-home
 
 sh ./gradlew :app:assembleDebug
 sh ./gradlew :app:assembleRelease
+
+# 可选：按 ABI 拆包，同时额外产出 universal 包
+sh ./gradlew :app:assembleRelease -PabiSplits
 ```
 
 如果你本机的 SDK / JDK 在别处，改环境变量或在根目录 `local.properties` 里写
 `sdk.dir=...` 即可。**不要**假设 `~/.gradle` 里有可用的 Gradle 发行版——
 wrapper 会重新下载 130 MB 的 `gradle-8.7-bin.zip`。
 
+`-PabiSplits` 的产物（未配置签名时文件名带 `-unsigned`）：
+
+```text
+app/build/outputs/apk/release/
+├── app-armeabi-v7a-release*.apk
+├── app-arm64-v8a-release*.apk
+├── app-x86_64-release*.apk
+└── app-universal-release*.apk
+```
+
+传该参数时 debug 变体也会拆包；日常模拟器调试不需要拆分。
+
 `app/build.gradle.kts` 里的几个硬约定：
 
-- `abiFilters = armeabi-v7a, arm64-v8a`：目标手表是 32 位 ARM，带上 arm64 便于新设备；
+- `abiFilters = armeabi-v7a, arm64-v8a, x86_64`：目标手表 32 位 ARM，arm64 便于新设备，x86_64 供模拟器运行；
 - `arguments += "-DANDROID_STL=none"`：全是 C，不链 C++ 运行时；
 - `externalNativeBuild.cmake.version = "3.22.1"`，`ndkVersion = "27.2.12479018"`；
 - `keystore.properties` 存在时，debug 与 release **共用同一套 release 签名**
   （签名一致才能 `adb install -r` 覆盖安装，不会清掉表上已有的函数和设置）；
-- release 打开 R8 + 资源压缩，体积从 ~19 MB 降到 ~4.4 MB。
+- release 打开 R8 + 资源压缩，universal 包约 6.6 MB，单 ABI 包约 2.1–2.4 MB；
+- `-PabiSplits` 走 `splits { abi { ... } }` 拆包，普通构建不受影响。
 
 ### 签名
 
@@ -186,6 +203,10 @@ v2 + v3。Android 7 那批只认 JAR 签名的老安装器会装不上，所以�
 校验时必须显式加 `--min-sdk-version 21`，否则 apksigner 只检 minSdk 需要的档位，
 会把明明存在的 v1 报成 `false`。
 
+没有 `keystore.properties` 时，`assembleRelease` 只能产出 `*-unsigned.apk`。可用 `apksigner`
+以 debug key 临时做 v1+v2+v3 三签（beta 测试包就是这样签的），但它与正式 release 签名
+不兼容，不能覆盖安装 release 签名的旧版。
+
 ### 安装到表上
 
 `tools/` 下保留了三个 Windows 脚本（`install-to-watch.ps1`、`verify-apk.ps1`、
@@ -193,6 +214,10 @@ v2 + v3。Android 7 那批只认 JAR 签名的老安装器会装不上，所以�
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install-to-watch.ps1
+
+# 按 ABI 拆包后，把对应单 ABI 包的路径传给脚本
+powershell -ExecutionPolicy Bypass -File tools\install-to-watch.ps1 `
+  app\build\outputs\apk\release\app-armeabi-v7a-release.apk
 ```
 
 ---
