@@ -542,9 +542,22 @@ static void draw_geo_point(const fd_geo *g)
     world_to_screen(g->p[0], &sx, &sy);
     int x = (int)lroundf(sx);
     int y = (int)lroundf(sy);
-    fill_circle(sx, sy, 4.5f, rgb(FD_C_ACCENT));
-    fill_circle(sx, sy, 2.0f, rgb(FD_C_BG));
+    fill_circle(sx, sy, 4.0f, rgb(FD_C_ACCENT));
     if (g->name[0]) add_tag(x + 6, y - 18, g->name, FD_C_TEXT);
+}
+
+/** 点击曲线后，在图上把那个点标出来（白圈 + 曲线色实心点）。 */
+static void draw_tap_marker(void)
+{
+    if (!g_tap_valid) return;
+    fd_curve *c = model_curve(g_tap_id);
+    if (!c) return;
+
+    float sx = fd_vp_to_screen_x(&model()->vp, g_tap_wx);
+    float sy = fd_vp_to_screen_y(&model()->vp, g_tap_wy);
+    fill_circle(sx, sy, 6.0f, rgb(FD_C_BG));
+    fill_circle(sx, sy, 5.0f, rgb(FD_C_TEXT));
+    fill_circle(sx, sy, 2.8f, rgb(model_color(c->fn.color_index)));
 }
 
 static void draw_geo_segment(const fd_geo *g)
@@ -915,6 +928,7 @@ static void repaint(void)
     draw_grid_and_axes(&d->vp, &d->settings);
     draw_curves();
     draw_geo();
+    draw_tap_marker();
     draw_tool_preview();
     update_card();
 
@@ -1065,34 +1079,6 @@ static bool nearest_curve_point(int id, float sx, float sy, double *wx, double *
                 *wy = fd_vp_to_world_y(&d->vp, pl->xy[2 * k + 1]);
                 found = true;
             }
-        }
-    }
-    return found;
-}
-
-/** 复平面：离点击位置最近的结果点。 */
-static int complex_hit(float sx, float sy)
-{
-    fd_doc *d = model();
-    float best = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
-    int found = 0;
-
-    for (int i = 0; i < d->curve_count; i++) {
-        const fd_curve *c = &d->curves[i];
-        if (!c->fn.visible || c->fn.src1[0] == '\0') continue;
-        fd_expr_error err;
-        fd_complex v;
-        memset(&err, 0, sizeof(err));
-        if (!cpx_eval_curve(c, &v, &err)) continue;
-        if (!isfinite(v.re) || !isfinite(v.im)) continue;
-        float px = fd_vp_to_screen_x(&d->vp, v.re);
-        float py = fd_vp_to_screen_y(&d->vp, v.im);
-        float dx = px - sx;
-        float dy = py - sy;
-        float d2 = dx * dx + dy * dy;
-        if (d2 < best) {
-            best = d2;
-            found = c->fn.id;
         }
     }
     return found;

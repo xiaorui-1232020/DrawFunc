@@ -405,6 +405,12 @@ int main(int argc, char **argv)
     pump(4);
     dump("22_curve_point");
 
+    /* 同一点再次点击：在重叠的曲线之间切换 */
+    pump(60);
+    tap(233, 233);
+    pump(4);
+    dump("23_cycle_curve");
+
     /* 复平面：一条复数表达式，结果画成点 */
     {
         int id = model_add_curve(FD_PLOT_EXPLICIT);
