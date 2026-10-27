@@ -1720,13 +1720,13 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap)
     unsigned err = lodepng_encode32(&png, &png_len, rgba, (unsigned)g_w, (unsigned)g_h);
     free(rgba);
     if (err != 0 || !png) {
-        free(png);
+        lv_free(png);
         return false;
     }
 
     /* 1) 系统相册：Pictures/DrawFunc（Android 10+，MediaStore，免权限） */
     if (platform_save_png(name, png, png_len)) {
-        free(png);
+        lv_free(png);
         snprintf(out_path, cap, "Pictures/DrawFunc/%s", name);
         return true;
     }
@@ -1734,7 +1734,7 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap)
     /* 2) 退回应用私有目录 archives/ */
     const char *dir = model_files_dir();
     if (!dir || dir[0] == '\0') {
-        free(png);
+        lv_free(png);
         return false;
     }
 
@@ -1747,12 +1747,12 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap)
 
     FILE *f = fopen(fs_path, "wb");
     if (!f) {
-        free(png);
+        lv_free(png);
         return false;
     }
     size_t wrote = fwrite(png, 1, png_len, f);
     fclose(f);
-    free(png);
+    lv_free(png);
     if (wrote != png_len) return false;
 
     snprintf(out_path, cap, "%s", fs_path);

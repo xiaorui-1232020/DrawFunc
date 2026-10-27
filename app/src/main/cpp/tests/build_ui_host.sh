@@ -13,12 +13,13 @@ set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CPP_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
+ROOT_DIR=$(cd "${CPP_DIR}/../../../.." && pwd)
 LVGL_DIR="${CPP_DIR}/third_party/lvgl"
 CC=${CC:-cc}
 OUT_DIR=${OUT_DIR:-/tmp/fd_ui_build}
 OBJ="${OUT_DIR}/obj"
 BIN="${OUT_DIR}/ui_smoke"
-SHOT_DIR=${1:-/tmp/fd_ui}
+SHOT_DIR=${1:-${ROOT_DIR}/test-artifacts}
 
 INC=(-I "${CPP_DIR}" -I "${LVGL_DIR}" -I "${CPP_DIR}/engine" \
      -I "${CPP_DIR}/src" -I "${CPP_DIR}/ui" -I "${CPP_DIR}/tests")

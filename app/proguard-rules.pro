@@ -10,4 +10,9 @@
     native <methods>;
 }
 
+# 原生层通过 JNI 按名字回调这一条（相册导出），不能被 R8 改名。
+-keepclassmembers class com.functiondrawer.watch.MainActivity {
+    public boolean savePngToGallery(byte[], java.lang.String);
+}
+
 -keepattributes SourceFile,LineNumberTable

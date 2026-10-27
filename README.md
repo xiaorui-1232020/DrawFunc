@@ -215,8 +215,10 @@ bash app/src/main/cpp/tests/build_cmath.sh
 bash app/src/main/cpp/tests/build_subst.sh
 
 # 5) 界面冒烟：内存显示 + 合成触摸，逐屏渲染并导出 PNG
-bash app/src/main/cpp/tests/build_ui_host.sh /tmp/fd_ui_shots
+bash app/src/main/cpp/tests/build_ui_host.sh
 ```
+
+不传参数时截图写到仓库根目录的 `test-artifacts/`；也可以传一个目录覆盖。
 
 五个脚本都支持：
 
@@ -235,7 +237,7 @@ bash app/src/main/cpp/tests/build_ui_host.sh /tmp/fd_ui_shots
    存档 → 清空 → 读回，核对对象数量与画面；
 5. 导出 PNG 并校验文件存在。
 
-产物（`/tmp/fd_ui_shots/`）：`01_graph` … `21_export_dialog`，共 21 张截图，
+产物（`test-artifacts/`）：`01_graph` … `21_export_dialog`，共 21 张截图，
 外加 `data/archives/smoke.png` 与 `data/autosave.fd`。
 
 ---
@@ -357,7 +359,8 @@ node node_modules/lv_font_conv/lv_font_conv.js \
 ```
 <filesDir>/autosave.fd                  自动保存（编辑器「完成」/ 设置页「保存」/ 存档页写）
 <filesDir>/archives/<标题>.fd           存档
-<filesDir>/archives/<标题>.png          导出的图像
+<filesDir>/archives/<标题>.png          导出的图像（相册不可用时的退路）
+相册 Pictures/DrawFunc/<标题>.png       导出的图像（Android 10+，MediaStore，免权限）
 ```
 
 - 写文件走「临时文件 + `rename`」，写到一半断电不会毁掉旧存档；
@@ -449,7 +452,6 @@ x(B)      B 不是已知点 → 原样保留，由引擎报错
 |---|---|
 | **没有坐标系三选一** | 设置里只有「复平面模式」开关（笛卡尔 ↔ 复平面）；没有旧版那种笛卡尔 / 极坐标 / 复平面三选一，也没有极坐标网格。极坐标与参数方程仍只能在新建曲线时按模式选。 |
 | 几何对象只有列表行 | 列表里已经有「图形」行（名字 + 类型/度量值 + 显隐 + 删除），但没有旧版的详情页、改名和属性卡；点的名字是 A/B/C…，其余对象是 f/g/h…（小写，跳过变量名与参数名）。 |
-| **导出位置** | PNG 只写应用私有目录 `archives/`（默认文件名 `graph-时间戳.png`，中文名保留）；没有存到旧版的 `Android/data/…/files/Pictures`，也没有走相册或下载目录。 |
 | 系统手势 / 首次确认框 | 旧版的「屏蔽系统手势」开关、首次切坐标系与首次用工具的确认框都未实现。 |
 | 长按线圈动画 | 旧版长按图标按钮会画一圈跑道形动画，C 版没有。 |
 | 未在真表验证 | 显示驱动、表冠、触摸采样率都只在主机端用内存显示 + 合成事件验证过。 |
