@@ -47,7 +47,13 @@ static lv_obj_t *g_card_expr;
 static lv_obj_t *g_card_err;
 static lv_obj_t *g_card_roots;
 static lv_obj_t *g_card_ext;
+static lv_obj_t *g_card_point;
 static lv_coord_t g_card_h = 52;
+
+/* 点击曲线后记住那个点的世界坐标（卡片里显示「点：(x, y)」）。 */
+static int g_tap_id;
+static bool g_tap_valid;
+static double g_tap_wx, g_tap_wy;
 
 /* 底部「− 滑动条 ＋」缩放栏（设置里打开才创建）。 */
 static lv_obj_t *g_zoom_bar;
@@ -513,14 +519,31 @@ static void draw_arc(float cx, float cy, float r, float a0, float a1,
     }
 }
 
+/** 实心圆（点用；Bresenham 太细，这里直接扫包围盒）。 */
+static void fill_circle(float cx, float cy, float r, uint32_t c)
+{
+    int x0 = (int)floorf(cx - r);
+    int x1 = (int)ceilf(cx + r);
+    int y0 = (int)floorf(cy - r);
+    int y1 = (int)ceilf(cy + r);
+    float r2 = r * r;
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            float dx = (float)x + 0.5f - cx;
+            float dy = (float)y + 0.5f - cy;
+            if (dx * dx + dy * dy <= r2) put(x, y, c);
+        }
+    }
+}
+
 static void draw_geo_point(const fd_geo *g)
 {
     float sx, sy;
     world_to_screen(g->p[0], &sx, &sy);
     int x = (int)lroundf(sx);
     int y = (int)lroundf(sy);
-    dot(x, y, 7, rgb(FD_C_ACCENT));
-    dot(x, y, 3, rgb(FD_C_BG));
+    fill_circle(sx, sy, 4.5f, rgb(FD_C_ACCENT));
+    fill_circle(sx, sy, 2.0f, rgb(FD_C_BG));
     if (g->name[0]) add_tag(x + 6, y - 18, g->name, FD_C_TEXT);
 }
 
@@ -679,6 +702,11 @@ static void update_features(const fd_curve *c)
 {
     char roots_txt[96] = "";
     char ext_txt[96] = "";
+    char point_txt[80] = "";
+
+    if (c && g_tap_valid && g_tap_id == c->fn.id) {
+        snprintf(point_txt, sizeof(point_txt), "点：(%.3g, %.3g)", g_tap_wx, g_tap_wy);
+    }
 
     if (c && c->fn.mode == FD_PLOT_EXPLICIT) {
         char body[FD_SRC_CAP];
@@ -732,10 +760,23 @@ static void update_features(const fd_curve *c)
         }
     }
 
+    set_feature_line(g_card_point, point_txt);
     set_feature_line(g_card_roots, roots_txt);
     set_feature_line(g_card_ext, ext_txt);
 
-    int lines = (roots_txt[0] ? 1 : 0) + (ext_txt[0] ? 1 : 0);
+    lv_coord_t y = 46;
+    if (point_txt[0] && g_card_point) {
+        lv_obj_set_pos(g_card_point, 30, y);
+        y += 18;
+    }
+    if (roots_txt[0] && g_card_roots) {
+        lv_obj_set_pos(g_card_roots, 30, y);
+        y += 18;
+    }
+    if (ext_txt[0] && g_card_ext) lv_obj_set_pos(g_card_ext, 30, y);
+
+    int lines = (point_txt[0] ? 1 : 0) + (roots_txt[0] ? 1 : 0) +
+                (ext_txt[0] ? 1 : 0);
     g_card_h = (lv_coord_t)(52 + lines * 18);
     if (g_card) lv_obj_set_height(g_card, g_card_h);
 }
@@ -781,8 +822,7 @@ static void draw_complex(void)
 
         float sx = fd_vp_to_screen_x(&d->vp, v.re);
         float sy = fd_vp_to_screen_y(&d->vp, v.im);
-        dot((int)lroundf(sx), (int)lroundf(sy), 8,
-            rgb(model_color(c->fn.color_index)));
+        fill_circle(sx, sy, 4.5f, rgb(model_color(c->fn.color_index)));
 
         char lbl[64];
         char txt[96];
@@ -820,6 +860,7 @@ static void update_card(void)
         if (!cpx_eval_curve(c, &v, &err)) {
             lv_label_set_text(g_card_err, err.message[0] ? err.message : "表达式无效");
             lv_obj_remove_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
+            set_feature_line(g_card_point, "");
             set_feature_line(g_card_roots, "");
             set_feature_line(g_card_ext, "");
             g_card_h = 52;
@@ -832,6 +873,7 @@ static void update_card(void)
         char txt[96];
         fd_cpx_label(v, lbl, sizeof(lbl));
         snprintf(txt, sizeof(txt), "结果：%s", lbl);
+        set_feature_line(g_card_point, "");
         set_feature_line(g_card_roots, txt);
         set_feature_line(g_card_ext, "");
         g_card_h = 70;
@@ -899,6 +941,59 @@ static int hit_test(float x, float y)
                 best = d2;
                 found = pl->function_id;
             }
+        }
+    }
+    return found;
+}
+
+/** 曲线折线上离点击位置最近的一个采样点（世界坐标）。 */
+static bool nearest_curve_point(int id, float sx, float sy, double *wx, double *wy)
+{
+    fd_doc *d = model();
+    float best = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    bool found = false;
+
+    for (int i = 0; i < g_plot.line_count; i++) {
+        const fd_polyline *pl = &g_plot.lines[i];
+        if (pl->function_id != id) continue;
+        for (int k = 0; k < pl->count; k++) {
+            float dx = pl->xy[2 * k] - sx;
+            float dy = pl->xy[2 * k + 1] - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < best) {
+                best = d2;
+                *wx = fd_vp_to_world_x(&d->vp, pl->xy[2 * k]);
+                *wy = fd_vp_to_world_y(&d->vp, pl->xy[2 * k + 1]);
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+
+/** 复平面：离点击位置最近的结果点。 */
+static int complex_hit(float sx, float sy)
+{
+    fd_doc *d = model();
+    float best = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    int found = 0;
+
+    for (int i = 0; i < d->curve_count; i++) {
+        const fd_curve *c = &d->curves[i];
+        if (!c->fn.visible || c->fn.src1[0] == '\0') continue;
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) continue;
+        if (!isfinite(v.re) || !isfinite(v.im)) continue;
+        float px = fd_vp_to_screen_x(&d->vp, v.re);
+        float py = fd_vp_to_screen_y(&d->vp, v.im);
+        float dx = px - sx;
+        float dy = py - sy;
+        float d2 = dx * dx + dy * dy;
+        if (d2 < best) {
+            best = d2;
+            found = c->fn.id;
         }
     }
     return found;
@@ -1540,9 +1635,19 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
                         g_last_tap_tick = now;
                         g_last_tap_x = g_down_x;
                         g_last_tap_y = g_down_y;
-                        int id = hit_test(g_down_x, g_down_y);
+                        int id = model()->settings.complex_plane
+                                         ? complex_hit(g_down_x, g_down_y)
+                                         : hit_test(g_down_x, g_down_y);
                         if (id) {
                             model_select(id);
+                            g_tap_id = id;
+                            g_tap_valid = !model()->settings.complex_plane &&
+                                          nearest_curve_point(id, g_down_x, g_down_y,
+                                                              &g_tap_wx, &g_tap_wy);
+                            repaint();
+                        } else if (g_tap_valid) {
+                            g_tap_valid = false;
+                            g_tap_id = 0;
                             repaint();
                         }
                     }
@@ -1630,6 +1735,9 @@ void ui_graph_detach(void)
     g_card_err = NULL;
     g_card_roots = NULL;
     g_card_ext = NULL;
+    g_card_point = NULL;
+    g_tap_valid = false;
+    g_tap_id = 0;
     g_zoom_bar = NULL;
     g_zoom_slider = NULL;
     g_zoom_depth = 0.0f;
@@ -2081,6 +2189,13 @@ static void build_card(lv_obj_t *parent)
     lv_obj_align(g_card_err, LV_ALIGN_TOP_LEFT, 30, 28);
 
     /* 零点 / 极值两行，有内容才显示（卡片高度随之变化）。 */
+    g_card_point = lv_label_create(card);
+    lv_label_set_text(g_card_point, "");
+    lv_obj_add_flag(g_card_point, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(g_card_point, &font_cn_14, 0);
+    lv_obj_set_style_text_color(g_card_point, lv_color_hex(FD_C_ACCENT), 0);
+    lv_obj_align(g_card_point, LV_ALIGN_TOP_LEFT, 30, 46);
+
     g_card_roots = lv_label_create(card);
     lv_label_set_text(g_card_roots, "");
     lv_obj_add_flag(g_card_roots, LV_OBJ_FLAG_HIDDEN);

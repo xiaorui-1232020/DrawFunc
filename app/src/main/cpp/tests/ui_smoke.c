@@ -396,6 +396,15 @@ int main(int argc, char **argv)
     dump("21_export_dialog");
     ui_archive_close_dialog();
 
+    /* 点击曲线：卡片显示该点坐标 + 解析式 + 零点/极值 */
+    ui_show(UI_SCR_GRAPH);
+    model_reset_view();
+    ui_graph_invalidate();
+    pump(4);
+    tap(233, 233);
+    pump(4);
+    dump("22_curve_point");
+
     /* 复平面：一条复数表达式，结果画成点 */
     {
         int id = model_add_curve(FD_PLOT_EXPLICIT);
