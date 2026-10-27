@@ -118,7 +118,7 @@ app/src/main/
     │   ├── cmath_test.c            + build_cmath.sh
     │   ├── subst_test.c            + build_subst.sh
     │   └── ui_smoke.c              + build_ui_host.sh（内存显示 + 导出 PNG）
-    └── third_party/lvgl/           LVGL 9.2.2（25 MB，已删 .git/docs/demos/examples/tests）
+    └── third_party/lvgl/           LVGL 9.2.2（19 MB，已删 .git/docs/demos/examples/tests/scripts）
 ```
 
 ---
