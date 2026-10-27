@@ -16,6 +16,17 @@
 
 #include "app.h"
 #include "lvgl.h"
+#include "platform.h"
+
+static JavaVM *g_vm;
+static jobject g_activity;
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
+{
+    LV_UNUSED(reserved);
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
 
 #define FD_INPUT_QUEUE 128
 
@@ -295,4 +306,53 @@ Java_com_functiondrawer_watch_MainActivity_nativeKey(JNIEnv *env, jobject thiz, 
     if (g_disp) used = app_key(code);
     pthread_mutex_unlock(&g_lock);
     return used ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_functiondrawer_watch_MainActivity_nativeSetActivity(JNIEnv *env, jobject thiz,
+                                                             jobject activity)
+{
+    LV_UNUSED(thiz);
+    if (g_activity) {
+        (*env)->DeleteGlobalRef(env, g_activity);
+        g_activity = NULL;
+    }
+    if (activity) g_activity = (*env)->NewGlobalRef(env, activity);
+}
+
+bool platform_save_png(const char *name, const unsigned char *data, size_t len)
+{
+    if (!g_vm || !g_activity || !data || len == 0 || len > 0x7FFFFFF0u) return false;
+
+    JNIEnv *env = NULL;
+    bool attached = false;
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, (void **)&env, NULL) != JNI_OK) return false;
+        attached = true;
+    }
+
+    bool ok = false;
+    jbyteArray arr = (*env)->NewByteArray(env, (jsize)len);
+    if (arr) {
+        (*env)->SetByteArrayRegion(env, arr, 0, (jsize)len, (const jbyte *)data);
+        jstring jname = (*env)->NewStringUTF(env, name);
+        jclass cls = (*env)->GetObjectClass(env, g_activity);
+        if (jname && cls) {
+            jmethodID mid = (*env)->GetMethodID(env, cls, "savePngToGallery",
+                                                "([BLjava/lang/String;)Z");
+            if (mid) {
+                ok = (*env)->CallBooleanMethod(env, g_activity, mid, arr, jname) == JNI_TRUE;
+            }
+        }
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            ok = false;
+        }
+        if (jname) (*env)->DeleteLocalRef(env, jname);
+        if (cls) (*env)->DeleteLocalRef(env, cls);
+        (*env)->DeleteLocalRef(env, arr);
+    }
+
+    if (attached) (*g_vm)->DetachCurrentThread(g_vm);
+    return ok;
 }
