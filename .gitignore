@@ -1,0 +1,19 @@
+# 本地工具链（Android SDK / Gradle 缓存），不属于源码
+.toolchain/
+local.properties
+.gradle/
+build/
+app/build/
+app/.cxx/
+.idea/
+*.iml
+.DS_Store
+
+# release 签名材料，绝不入库
+keystore.properties
+keystore/
+*.jks
+*.keystore
+
+# 本地打包产物
+dist/

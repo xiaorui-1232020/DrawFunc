@@ -1,11 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      只用一个「空壳」XML 主题：界面全部由 Compose 画，
-      那套"像 Material Design 3"的外观（配色 / 形状 / 字体）是项目自己实现的
-      （见 ui/theme/Theme.kt、ui/WatchColors.kt），依赖里**没有** material3
-      （本机缓存里没有该构件，Maven Central 也不可达，用的是 androidx.compose.material）。
-      父主题用框架自带的 Theme.Material.NoActionBar（API 21 起就有，
+      只用一个「空壳」XML 主题：界面全部由 C + LVGL 画，这里只管窗口背景与
+      系统栏的颜色。父主题用框架自带的 Theme.Material.NoActionBar（API 21 起就有，
       minSdk 现在降到 24，仍然一定有）；下面用到的 windowLightStatusBar 是 API 23 起的，
       同样在 24 上可用，所以这个主题**不需要任何版本守卫**。
     -->
