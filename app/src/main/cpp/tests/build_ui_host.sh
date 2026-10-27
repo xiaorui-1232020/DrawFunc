@@ -19,7 +19,7 @@ CC=${CC:-cc}
 OUT_DIR=${OUT_DIR:-/tmp/fd_ui_build}
 OBJ="${OUT_DIR}/obj"
 BIN="${OUT_DIR}/ui_smoke"
-SHOT_DIR=${1:-${ROOT_DIR}/test-artifacts}
+SHOT_DIR=${1:-${ROOT_DIR}/test-artifacts/lvgl-smoke}
 
 INC=(-I "${CPP_DIR}" -I "${LVGL_DIR}" -I "${CPP_DIR}/engine" \
      -I "${CPP_DIR}/src" -I "${CPP_DIR}/ui" -I "${CPP_DIR}/tests")

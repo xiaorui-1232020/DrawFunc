@@ -218,7 +218,7 @@ bash app/src/main/cpp/tests/build_subst.sh
 bash app/src/main/cpp/tests/build_ui_host.sh
 ```
 
-不传参数时截图写到仓库根目录的 `test-artifacts/`；也可以传一个目录覆盖。
+不传参数时截图写到 `test-artifacts/lvgl-smoke/`；也可以传一个目录覆盖。
 
 五个脚本都支持：
 
@@ -237,7 +237,7 @@ bash app/src/main/cpp/tests/build_ui_host.sh
    存档 → 清空 → 读回，核对对象数量与画面；
 5. 导出 PNG 并校验文件存在。
 
-产物（`test-artifacts/`）：`01_graph` … `21_export_dialog`，共 21 张截图，
+产物（`test-artifacts/lvgl-smoke/`）：`01_graph` … `21_export_dialog`，共 21 张截图，
 外加 `data/archives/smoke.png` 与 `data/autosave.fd`。
 
 ---
