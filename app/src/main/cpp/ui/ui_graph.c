@@ -946,6 +946,105 @@ static int hit_test(float x, float y)
     return found;
 }
 
+/* 点击处可能有多条曲线经过：按距离收集，供「再次点击切换」用。 */
+static int g_cycle_ids[FD_MAX_CURVES];
+static int g_cycle_n;
+static int g_cycle_idx;
+static float g_cycle_x, g_cycle_y;
+static uint32_t g_cycle_tick;
+
+static int collect_curve_ids(float sx, float sy, int *out, int cap)
+{
+    float best[FD_MAX_CURVES];
+    int n = 0;
+    const float lim = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+
+    for (int i = 0; i < g_plot.line_count; i++) {
+        const fd_polyline *pl = &g_plot.lines[i];
+        float bd = lim;
+        for (int k = 0; k < pl->count; k++) {
+            float dx = pl->xy[2 * k] - sx;
+            float dy = pl->xy[2 * k + 1] - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bd) bd = d2;
+        }
+        if (bd >= lim) continue;
+
+        int idx = -1;
+        for (int j = 0; j < n; j++) {
+            if (out[j] == pl->function_id) {
+                idx = j;
+                break;
+            }
+        }
+        if (idx >= 0) {
+            if (bd < best[idx]) best[idx] = bd;
+        } else if (n < cap) {
+            out[n] = pl->function_id;
+            best[n] = bd;
+            n++;
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (best[j] < best[i]) {
+                float td = best[i];
+                best[i] = best[j];
+                best[j] = td;
+                int ti = out[i];
+                out[i] = out[j];
+                out[j] = ti;
+            }
+        }
+    }
+    return n;
+}
+
+static int collect_complex_ids(float sx, float sy, int *out, int cap)
+{
+    fd_doc *d = model();
+    float best[FD_MAX_CURVES];
+    int n = 0;
+    const float lim = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+
+    for (int i = 0; i < d->curve_count && n < cap; i++) {
+        const fd_curve *c = &d->curves[i];
+        if (!c->fn.visible || c->fn.src1[0] == '\0') continue;
+
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) continue;
+        if (!isfinite(v.re) || !isfinite(v.im)) continue;
+
+        float px = fd_vp_to_screen_x(&d->vp, v.re);
+        float py = fd_vp_to_screen_y(&d->vp, v.im);
+        float dx = px - sx;
+        float dy = py - sy;
+        float d2 = dx * dx + dy * dy;
+        if (d2 >= lim) continue;
+
+        out[n] = c->fn.id;
+        best[n] = d2;
+        n++;
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (best[j] < best[i]) {
+                float td = best[i];
+                best[i] = best[j];
+                best[j] = td;
+                int ti = out[i];
+                out[i] = out[j];
+                out[j] = ti;
+            }
+        }
+    }
+    return n;
+}
+
 /** 曲线折线上离点击位置最近的一个采样点（世界坐标）。 */
 static bool nearest_curve_point(int id, float sx, float sy, double *wx, double *wy)
 {
@@ -1630,18 +1729,39 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
                         model_reset_view();
                         ui_toast("视图已复位");
                         g_last_tap_tick = 0;
+                        g_cycle_n = 0;
                         repaint();
                     } else {
                         g_last_tap_tick = now;
                         g_last_tap_x = g_down_x;
                         g_last_tap_y = g_down_y;
-                        int id = model()->settings.complex_plane
-                                         ? complex_hit(g_down_x, g_down_y)
-                                         : hit_test(g_down_x, g_down_y);
-                        if (id) {
+
+                        bool complex = model()->settings.complex_plane;
+                        bool same = g_cycle_n > 0 &&
+                                    fabsf(g_down_x - g_cycle_x) <= 24.0f &&
+                                    fabsf(g_down_y - g_cycle_y) <= 24.0f &&
+                                    (uint32_t)(now - g_cycle_tick) > FD_DOUBLE_TAP_MS &&
+                                    (uint32_t)(now - g_cycle_tick) <= 3000u;
+                        if (same) {
+                            /* 同一点再次点击：切换到下一条经过这里的曲线。 */
+                            g_cycle_idx = (g_cycle_idx + 1) % g_cycle_n;
+                        } else {
+                            g_cycle_n = complex
+                                                ? collect_complex_ids(g_down_x, g_down_y,
+                                                                      g_cycle_ids, FD_MAX_CURVES)
+                                                : collect_curve_ids(g_down_x, g_down_y,
+                                                                    g_cycle_ids, FD_MAX_CURVES);
+                            g_cycle_idx = 0;
+                            g_cycle_x = g_down_x;
+                            g_cycle_y = g_down_y;
+                        }
+                        g_cycle_tick = now;
+
+                        if (g_cycle_n > 0) {
+                            int id = g_cycle_ids[g_cycle_idx];
                             model_select(id);
                             g_tap_id = id;
-                            g_tap_valid = !model()->settings.complex_plane &&
+                            g_tap_valid = !complex &&
                                           nearest_curve_point(id, g_down_x, g_down_y,
                                                               &g_tap_wx, &g_tap_wy);
                             repaint();
