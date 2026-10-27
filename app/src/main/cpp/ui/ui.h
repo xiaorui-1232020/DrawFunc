@@ -53,6 +53,17 @@ lv_obj_t *ui_root(void);
 lv_coord_t ui_width(void);
 lv_coord_t ui_height(void);
 
+/* ---- 设备适配 ----
+ * 以 466×466 圆表为设计基准：scale = min(w,h)/466（夹在 0.75~2.2）。
+ * 固定像素尺寸用 UI_PX() 换算；字号从 14/16/20 三档里按 scale 选。
+ */
+float ui_scale(void);
+lv_coord_t ui_px(int v);
+#define UI_PX(v) ui_px(v)
+const lv_font_t *ui_font_small(void);
+const lv_font_t *ui_font_body(void);
+const lv_font_t *ui_font_title(void);
+
 /* ---- 通用控件 ---- */
 lv_obj_t *ui_panel(lv_obj_t *parent, lv_coord_t w, lv_coord_t h);
 lv_obj_t *ui_label(lv_obj_t *parent, const char *text, uint32_t color);

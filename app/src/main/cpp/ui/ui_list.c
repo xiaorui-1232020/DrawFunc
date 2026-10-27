@@ -98,9 +98,9 @@ static lv_obj_t *small_button(lv_obj_t *parent, const char *text,
                               lv_event_cb_t cb, void *data)
 {
     lv_obj_t *b = ui_button(parent, text, cb);
-    lv_obj_set_height(b, 34);
-    lv_obj_set_style_pad_hor(b, 10, 0);
-    lv_obj_set_style_radius(b, 11, 0);
+    lv_obj_set_height(b, UI_PX(34));
+    lv_obj_set_style_pad_hor(b, UI_PX(10), 0);
+    lv_obj_set_style_radius(b, UI_PX(11), 0);
     lv_obj_set_user_data(b, data);
     return b;
 }
@@ -149,7 +149,7 @@ static void build_row(lv_obj_t *list, fd_curve *c)
     lv_obj_t *row = lv_obj_create(list);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, 58);
+    lv_obj_set_height(row, UI_PX(58));
     lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(row, 14, 0);
@@ -169,7 +169,7 @@ static void build_row(lv_obj_t *list, fd_curve *c)
 
     lv_obj_t *name = lv_label_create(row);
     lv_label_set_text(name, c->name);
-    lv_obj_set_style_text_font(name, &font_cn_16, 0);
+    lv_obj_set_style_text_font(name, ui_font_body(), 0);
     lv_obj_set_style_text_color(name,
                                 lv_color_hex(c->fn.visible ? FD_C_TEXT : FD_C_DIM), 0);
     lv_obj_align(name, LV_ALIGN_TOP_LEFT, 18, 2);
@@ -183,7 +183,7 @@ static void build_row(lv_obj_t *list, fd_curve *c)
     lv_obj_t *expr = lv_label_create(row);
     lv_label_set_text(expr, summary);
     lv_label_set_long_mode(expr, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(expr, 190);
+    lv_obj_set_width(expr, UI_PX(190));
     lv_obj_set_style_text_font(expr, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(expr, lv_color_hex(FD_C_DIM), 0);
     lv_obj_align(expr, LV_ALIGN_TOP_LEFT, 18, 24);
@@ -316,7 +316,7 @@ static void build_slider_row(lv_obj_t *list, fd_slider *s, int content_w)
 
     lv_obj_t *name = lv_label_create(row);
     lv_label_set_text(name, s->param);
-    lv_obj_set_style_text_font(name, &font_cn_16, 0);
+    lv_obj_set_style_text_font(name, ui_font_body(), 0);
     lv_obj_set_style_text_color(name, lv_color_hex(FD_C_ACCENT), 0);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -453,7 +453,7 @@ static void build_presets(lv_obj_t *list)
         lv_obj_t *b = small_button(grid, k_presets[i].label, preset_clicked,
                                    (void *)&k_presets[i]);
         lv_obj_set_width(b, btn_w);
-        lv_obj_set_height(b, 32);
+        lv_obj_set_height(b, UI_PX(32));
         lv_obj_set_style_pad_hor(b, 4, 0);
     }
 }
@@ -522,7 +522,7 @@ static void build_geo_row(lv_obj_t *list, const fd_geo *g)
     lv_obj_t *row = lv_obj_create(list);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, 46);
+    lv_obj_set_height(row, UI_PX(46));
     lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(row, 12, 0);
@@ -539,7 +539,7 @@ static void build_geo_row(lv_obj_t *list, const fd_geo *g)
 
     lv_obj_t *name = lv_label_create(row);
     lv_label_set_text(name, g->name);
-    lv_obj_set_style_text_font(name, &font_cn_16, 0);
+    lv_obj_set_style_text_font(name, ui_font_body(), 0);
     lv_obj_set_style_text_color(name,
                                 lv_color_hex(g->visible ? FD_C_TEXT : FD_C_DIM), 0);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 18, 0);
@@ -548,7 +548,7 @@ static void build_geo_row(lv_obj_t *list, const fd_geo *g)
     geo_info_text(g, info, sizeof(info));
     lv_obj_t *desc = lv_label_create(row);
     lv_label_set_text(desc, info);
-    lv_obj_set_style_text_font(desc, &font_cn_14, 0);
+    lv_obj_set_style_text_font(desc, ui_font_small(), 0);
     lv_obj_set_style_text_color(desc, lv_color_hex(FD_C_DIM), 0);
     lv_obj_align(desc, LV_ALIGN_LEFT_MID, 58, 0);
 
@@ -576,21 +576,21 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(root, 12, 0);
+    lv_obj_set_style_pad_all(root, UI_PX(12), 0);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(root, 8, 0);
+    lv_obj_set_style_pad_row(root, UI_PX(8), 0);
 
     lv_obj_t *head = lv_obj_create(root);
     lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, LV_PCT(100), 40);
+    lv_obj_set_size(head, LV_PCT(100), UI_PX(40));
     lv_obj_remove_flag(head, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(head);
     lv_label_set_text(title, "函数列表");
-    lv_obj_set_style_text_font(title, &font_cn_16, 0);
+    lv_obj_set_style_text_font(title, ui_font_body(), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 2, 0);
 
@@ -646,7 +646,7 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
 
     lv_obj_t *foot = lv_obj_create(root);
     lv_obj_remove_style_all(foot);
-    lv_obj_set_size(foot, LV_PCT(100), 36);
+    lv_obj_set_size(foot, LV_PCT(100), UI_PX(36));
     lv_obj_remove_flag(foot, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(foot, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(foot, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,

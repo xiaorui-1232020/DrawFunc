@@ -92,30 +92,30 @@ void ui_archive_open_export_dialog(void)
 
     lv_obj_t *panel = lv_obj_create(dlg);
     lv_obj_remove_style_all(panel);
-    lv_obj_set_size(panel, 360, 216);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 74);
+    lv_obj_set_size(panel, UI_PX(360), UI_PX(216));
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, UI_PX(74));
     lv_obj_set_style_bg_color(panel, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(panel, 16, 0);
-    lv_obj_set_style_pad_all(panel, 10, 0);
+    lv_obj_set_style_radius(panel, UI_PX(16), 0);
+    lv_obj_set_style_pad_all(panel, UI_PX(10), 0);
     lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl = lv_label_create(panel);
     lv_label_set_text(lbl, "文件名");
-    lv_obj_set_style_text_font(lbl, &font_cn_16, 0);
+    lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 2, 0);
 
     lv_obj_t *ta = lv_textarea_create(panel);
     g_dlg_ta = ta;
     lv_obj_remove_style_all(ta);
-    lv_obj_set_size(ta, LV_PCT(100), 40);
-    lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 26);
+    lv_obj_set_size(ta, LV_PCT(100), UI_PX(40));
+    lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, UI_PX(26));
     lv_obj_set_style_bg_color(ta, lv_color_hex(FD_C_PANEL2), 0);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(ta, 10, 0);
-    lv_obj_set_style_pad_hor(ta, 10, 0);
-    lv_obj_set_style_pad_ver(ta, 8, 0);
+    lv_obj_set_style_radius(ta, UI_PX(10), 0);
+    lv_obj_set_style_pad_hor(ta, UI_PX(10), 0);
+    lv_obj_set_style_pad_ver(ta, UI_PX(8), 0);
     lv_obj_set_style_border_width(ta, 0, 0);
     lv_obj_set_style_text_color(ta, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_set_style_text_font(ta, &lv_font_montserrat_16, 0);
@@ -124,18 +124,18 @@ void ui_archive_open_export_dialog(void)
     lv_textarea_set_text(ta, g_name);
 
     lv_obj_t *kb = lv_keyboard_create(panel);
-    lv_obj_set_size(kb, LV_PCT(100), 120);
+    lv_obj_set_size(kb, LV_PCT(100), UI_PX(120));
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(kb, ta);
 
     lv_obj_t *cancel = ui_button(dlg, "取消", dlg_cancel);
-    lv_obj_set_size(cancel, 82, 34);
-    lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, -52, -12);
+    lv_obj_set_size(cancel, UI_PX(82), UI_PX(34));
+    lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, -UI_PX(52), -UI_PX(12));
 
     lv_obj_t *ok = ui_button(dlg, "导出", dlg_confirm);
-    lv_obj_set_size(ok, 82, 34);
-    lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, 52, -12);
+    lv_obj_set_size(ok, UI_PX(82), UI_PX(34));
+    lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, UI_PX(52), -UI_PX(12));
     lv_obj_set_style_bg_color(ok, lv_color_hex(0x18323C), 0);
     lv_obj_t *ol = lv_obj_get_child(ok, 0);
     if (ol) lv_obj_set_style_text_color(ol, lv_color_hex(FD_C_ACCENT), 0);
@@ -177,21 +177,21 @@ lv_obj_t *ui_archive_create(lv_obj_t *parent)
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(root, 12, 0);
+    lv_obj_set_style_pad_all(root, UI_PX(12), 0);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(root, 8, 0);
+    lv_obj_set_style_pad_row(root, UI_PX(8), 0);
 
     lv_obj_t *head = lv_obj_create(root);
     lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, LV_PCT(100), 38);
+    lv_obj_set_size(head, LV_PCT(100), UI_PX(38));
     lv_obj_remove_flag(head, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(head);
     lv_label_set_text(title, "存档");
-    lv_obj_set_style_text_font(title, &font_cn_16, 0);
+    lv_obj_set_style_text_font(title, ui_font_body(), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 2, 0);
 
@@ -201,20 +201,20 @@ lv_obj_t *ui_archive_create(lv_obj_t *parent)
 
     lv_obj_t *actions = lv_obj_create(root);
     lv_obj_remove_style_all(actions);
-    lv_obj_set_size(actions, LV_PCT(100), 40);
+    lv_obj_set_size(actions, LV_PCT(100), UI_PX(40));
     lv_obj_remove_flag(actions, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *save = ui_button(actions, "保存当前", save_clicked);
-    lv_obj_set_size(save, 130, 36);
+    lv_obj_set_size(save, UI_PX(130), UI_PX(36));
     lv_obj_set_style_bg_color(save, lv_color_hex(0x18323C), 0);
     lv_obj_t *sl = lv_obj_get_child(save, 0);
     if (sl) lv_obj_set_style_text_color(sl, lv_color_hex(FD_C_ACCENT), 0);
 
     lv_obj_t *exp = ui_button(actions, "导出 PNG", export_clicked);
-    lv_obj_set_size(exp, 130, 36);
+    lv_obj_set_size(exp, UI_PX(130), UI_PX(36));
 
     lv_obj_t *list = lv_obj_create(root);
     lv_obj_remove_style_all(list);
@@ -239,7 +239,7 @@ lv_obj_t *ui_archive_create(lv_obj_t *parent)
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, 54);
+        lv_obj_set_height(row, UI_PX(54));
         lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 14, 0);
@@ -250,17 +250,17 @@ lv_obj_t *ui_archive_create(lv_obj_t *parent)
         lv_label_set_text(name, g_entries[i].title);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_width(name, 210);
-        lv_obj_set_style_text_font(name, &font_cn_16, 0);
+        lv_obj_set_style_text_font(name, ui_font_body(), 0);
         lv_obj_set_style_text_color(name, lv_color_hex(FD_C_TEXT), 0);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
         lv_obj_t *load = ui_button(row, "载入", load_clicked);
-        lv_obj_set_size(load, 58, 32);
+        lv_obj_set_size(load, UI_PX(58), UI_PX(32));
         lv_obj_set_user_data(load, (void *)(intptr_t)i);
         lv_obj_align(load, LV_ALIGN_RIGHT_MID, -62, 0);
 
         lv_obj_t *del = ui_button(row, "删", delete_clicked);
-        lv_obj_set_size(del, 44, 32);
+        lv_obj_set_size(del, UI_PX(44), UI_PX(32));
         lv_obj_set_user_data(del, (void *)(intptr_t)i);
         lv_obj_set_style_bg_color(del, lv_color_hex(0x3A2024), 0);
         lv_obj_t *dl = lv_obj_get_child(del, 0);

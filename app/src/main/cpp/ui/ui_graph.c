@@ -418,7 +418,7 @@ static void add_tag(int x, int y, const char *text, uint32_t color)
     if (!g_numbers) return;
     lv_obj_t *l = lv_label_create(g_numbers);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &font_cn_14, 0);
+    lv_obj_set_style_text_font(l, ui_font_small(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
     lv_obj_set_pos(l, x, y);
 }
@@ -555,9 +555,10 @@ static void draw_tap_marker(void)
 
     float sx = fd_vp_to_screen_x(&model()->vp, g_tap_wx);
     float sy = fd_vp_to_screen_y(&model()->vp, g_tap_wy);
-    fill_circle(sx, sy, 6.0f, rgb(FD_C_BG));
-    fill_circle(sx, sy, 5.0f, rgb(FD_C_TEXT));
-    fill_circle(sx, sy, 2.8f, rgb(model_color(c->fn.color_index)));
+    float r = ui_scale();
+    fill_circle(sx, sy, 6.0f * r, rgb(FD_C_BG));
+    fill_circle(sx, sy, 5.0f * r, rgb(FD_C_TEXT));
+    fill_circle(sx, sy, 2.8f * r, rgb(model_color(c->fn.color_index)));
 }
 
 static void draw_geo_segment(const fd_geo *g)
@@ -777,20 +778,21 @@ static void update_features(const fd_curve *c)
     set_feature_line(g_card_roots, roots_txt);
     set_feature_line(g_card_ext, ext_txt);
 
-    lv_coord_t y = 46;
+    lv_coord_t step = UI_PX(18);
+    lv_coord_t y = UI_PX(46);
     if (point_txt[0] && g_card_point) {
-        lv_obj_set_pos(g_card_point, 30, y);
-        y += 18;
+        lv_obj_set_pos(g_card_point, UI_PX(30), y);
+        y += step;
     }
     if (roots_txt[0] && g_card_roots) {
-        lv_obj_set_pos(g_card_roots, 30, y);
-        y += 18;
+        lv_obj_set_pos(g_card_roots, UI_PX(30), y);
+        y += step;
     }
-    if (ext_txt[0] && g_card_ext) lv_obj_set_pos(g_card_ext, 30, y);
+    if (ext_txt[0] && g_card_ext) lv_obj_set_pos(g_card_ext, UI_PX(30), y);
 
     int lines = (point_txt[0] ? 1 : 0) + (roots_txt[0] ? 1 : 0) +
                 (ext_txt[0] ? 1 : 0);
-    g_card_h = (lv_coord_t)(52 + lines * 18);
+    g_card_h = (lv_coord_t)(UI_PX(52) + lines * step);
     if (g_card) lv_obj_set_height(g_card, g_card_h);
 }
 
@@ -941,7 +943,8 @@ static void repaint(void)
 
 static int hit_test(float x, float y)
 {
-    const float limit = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    float hp = FD_GRAPH_HIT_PX * ui_scale();
+    const float limit = hp * hp;
     float best = limit;
     int found = 0;
 
@@ -971,7 +974,7 @@ static int collect_curve_ids(float sx, float sy, int *out, int cap)
 {
     float best[FD_MAX_CURVES];
     int n = 0;
-    const float lim = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    const float lim = (FD_GRAPH_HIT_PX * ui_scale()) * (FD_GRAPH_HIT_PX * ui_scale());
 
     for (int i = 0; i < g_plot.line_count; i++) {
         const fd_polyline *pl = &g_plot.lines[i];
@@ -1020,7 +1023,7 @@ static int collect_complex_ids(float sx, float sy, int *out, int cap)
     fd_doc *d = model();
     float best[FD_MAX_CURVES];
     int n = 0;
-    const float lim = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    const float lim = (FD_GRAPH_HIT_PX * ui_scale()) * (FD_GRAPH_HIT_PX * ui_scale());
 
     for (int i = 0; i < d->curve_count && n < cap; i++) {
         const fd_curve *c = &d->curves[i];
@@ -1063,7 +1066,8 @@ static int collect_complex_ids(float sx, float sy, int *out, int cap)
 static bool nearest_curve_point(int id, float sx, float sy, double *wx, double *wy)
 {
     fd_doc *d = model();
-    float best = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    float best = FD_GRAPH_HIT_PX * ui_scale();
+    best *= best;
     bool found = false;
 
     for (int i = 0; i < g_plot.line_count; i++) {
@@ -1087,10 +1091,10 @@ static bool nearest_curve_point(int id, float sx, float sy, double *wx, double *
 /** 顶部按钮条 / 工具提示条 / 底部信息卡 + 缩放栏所占的区域不参与手势，避免误触。 */
 static bool in_ui_band(float y)
 {
-    if (y < 56.0f) return true;
-    if (g_tool != FD_TOOL_MOVE && y < 96.0f) return true;
-    if (g_card && y > (float)(g_h - 16 - g_card_h)) return true;
-    if (g_zoom_bar && y > (float)(g_h - 52)) return true;
+    if (y < (float)UI_PX(56)) return true;
+    if (g_tool != FD_TOOL_MOVE && y < (float)UI_PX(96)) return true;
+    if (g_card && y > (float)(g_h - UI_PX(16) - g_card_h)) return true;
+    if (g_zoom_bar && y > (float)(g_h - UI_PX(52))) return true;
     return false;
 }
 
@@ -2010,8 +2014,8 @@ static lv_obj_t *add_chip(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
                           void *data)
 {
     lv_obj_t *b = ui_button(parent, text, NULL);
-    lv_obj_set_height(b, 32);
-    lv_obj_set_style_pad_hor(b, 11, 0);
+    lv_obj_set_height(b, UI_PX(32));
+    lv_obj_set_style_pad_hor(b, UI_PX(11), 0);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, data);
     return b;
 }
@@ -2079,24 +2083,24 @@ static void build_hint(lv_obj_t *parent)
     lv_obj_t *bar = lv_obj_create(parent);
     g_hint = bar;
     lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, LV_PCT(100), 36);
+    lv_obj_set_size(bar, LV_PCT(100), UI_PX(36));
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x1A222C), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_90, 0);
-    lv_obj_set_style_pad_hor(bar, 12, 0);
-    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_style_pad_hor(bar, UI_PX(12), 0);
+    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, UI_PX(56));
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
     g_hint_label = lv_label_create(bar);
     lv_label_set_text(g_hint_label, "");
     lv_obj_set_width(g_hint_label, LV_PCT(76));
     lv_label_set_long_mode(g_hint_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_font(g_hint_label, &font_cn_14, 0);
+    lv_obj_set_style_text_font(g_hint_label, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_hint_label, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(g_hint_label, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *exit = ui_button(bar, "退出", hint_exit_clicked);
-    lv_obj_set_height(exit, 28);
-    lv_obj_set_style_pad_hor(exit, 10, 0);
+    lv_obj_set_height(exit, UI_PX(28));
+    lv_obj_set_style_pad_hor(exit, UI_PX(10), 0);
     lv_obj_align(exit, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
@@ -2111,8 +2115,8 @@ static void build_tool_panel(lv_obj_t *parent)
     lv_obj_set_pos(p, 0, 0);
     lv_obj_set_style_bg_color(p, lv_color_hex(FD_C_BG), 0);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(p, 12, 0);
-    lv_obj_set_style_pad_row(p, 6, 0);
+    lv_obj_set_style_pad_all(p, UI_PX(12), 0);
+    lv_obj_set_style_pad_row(p, UI_PX(6), 0);
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(p, LV_DIR_VER);
     lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
@@ -2127,14 +2131,14 @@ static void build_tool_panel(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *title = ui_label(row, "工具", FD_C_TEXT);
-    lv_obj_set_style_text_font(title, &font_cn_20, 0);
+    lv_obj_set_style_text_font(title, ui_font_title(), 0);
 
     lv_obj_t *close = ui_button(row, "关闭", panel_close_clicked);
     lv_obj_set_height(close, 34);
 
     for (int s = 0; s < 5; s++) {
         lv_obj_t *sec = ui_label(p, k_section_names[s], FD_C_DIM);
-        lv_obj_set_style_text_font(sec, &font_cn_14, 0);
+        lv_obj_set_style_text_font(sec, ui_font_small(), 0);
         lv_obj_set_height(sec, 16);
 
         lv_obj_t *wrap = lv_obj_create(p);
@@ -2165,21 +2169,21 @@ static void build_toolbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, LV_SIZE_CONTENT, 40);
+    lv_obj_set_size(bar, LV_SIZE_CONTENT, UI_PX(40));
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(bar, 8, 0);
-    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_pad_column(bar, UI_PX(8), 0);
+    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, UI_PX(10));
 
     lv_obj_t *list = ui_button(bar, "列表", list_clicked);
-    lv_obj_set_height(list, 34);
+    lv_obj_set_height(list, UI_PX(34));
     lv_obj_t *add = ui_button(bar, "新建", add_clicked);
-    lv_obj_set_height(add, 34);
+    lv_obj_set_height(add, UI_PX(34));
     lv_obj_t *tools = ui_button(bar, "工具", NULL);
-    lv_obj_set_height(tools, 34);
+    lv_obj_set_height(tools, UI_PX(34));
     lv_obj_add_event_cb(tools, tools_clicked, LV_EVENT_CLICKED, NULL);
 }
 
@@ -2217,32 +2221,32 @@ static void build_zoom_bar(lv_obj_t *parent)
     lv_obj_t *bar = lv_obj_create(parent);
     g_zoom_bar = bar;
     lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, 300, 44);
+    lv_obj_set_size(bar, UI_PX(300), UI_PX(44));
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -UI_PX(4));
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(bar, 8, 0);
+    lv_obj_set_style_pad_column(bar, UI_PX(8), 0);
 
     lv_obj_t *minus = ui_button(bar, "−", zoom_step_clicked);
-    lv_obj_set_size(minus, 44, 36);
+    lv_obj_set_size(minus, UI_PX(44), UI_PX(36));
     lv_obj_set_user_data(minus, (void *)(intptr_t)-1);
 
     lv_obj_t *sl = lv_slider_create(bar);
     g_zoom_slider = sl;
-    lv_obj_set_size(sl, 170, 8);
+    lv_obj_set_size(sl, UI_PX(170), UI_PX(8));
     lv_slider_set_range(sl, 0, 100);
     lv_slider_set_value(sl, 50, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(sl, lv_color_hex(0x2A3542), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sl, lv_color_hex(FD_C_ACCENT), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(sl, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
-    lv_obj_set_style_pad_all(sl, 6, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(sl, UI_PX(6), LV_PART_KNOB);
     lv_obj_add_event_cb(sl, zoom_slider_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *plus = ui_button(bar, "+", zoom_step_clicked);
-    lv_obj_set_size(plus, 44, 36);
+    lv_obj_set_size(plus, UI_PX(44), UI_PX(36));
     lv_obj_set_user_data(plus, (void *)(intptr_t)1);
 
     g_zoom_depth = 0.0f;
@@ -2253,68 +2257,68 @@ static void build_card(lv_obj_t *parent)
     lv_obj_t *card = lv_obj_create(parent);
     g_card = card;
     lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, 244, 52);
+    lv_obj_set_size(card, UI_PX(244), UI_PX(52));
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1A222C), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_90, 0);
-    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_radius(card, UI_PX(16), 0);
     lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
     /* 打开缩放栏时信息卡上移，给底部那一栏让位。 */
     lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0,
-                 model()->settings.show_zoom_bar ? -62 : -16);
+                 model()->settings.show_zoom_bar ? -UI_PX(62) : -UI_PX(16));
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     ui_set_click(card, card_clicked);
 
     g_card_dot = lv_obj_create(card);
     lv_obj_remove_style_all(g_card_dot);
-    lv_obj_set_size(g_card_dot, 12, 12);
+    lv_obj_set_size(g_card_dot, UI_PX(12), UI_PX(12));
     lv_obj_set_style_radius(g_card_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_card_dot, lv_color_hex(FD_C_ACCENT), 0);
     lv_obj_set_style_bg_opa(g_card_dot, LV_OPA_COVER, 0);
-    lv_obj_align(g_card_dot, LV_ALIGN_LEFT_MID, 12, -6);
+    lv_obj_align(g_card_dot, LV_ALIGN_LEFT_MID, UI_PX(12), -UI_PX(6));
 
     g_card_name = lv_label_create(card);
     lv_label_set_text(g_card_name, "a(x)");
-    lv_obj_set_style_text_font(g_card_name, &font_cn_16, 0);
+    lv_obj_set_style_text_font(g_card_name, ui_font_body(), 0);
     lv_obj_set_style_text_color(g_card_name, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_align(g_card_name, LV_ALIGN_TOP_LEFT, 30, 6);
+    lv_obj_align(g_card_name, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(6));
 
     g_card_expr = lv_label_create(card);
     lv_label_set_text(g_card_expr, "sin(x)");
     lv_label_set_long_mode(g_card_expr, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(g_card_expr, 198);
-    lv_obj_set_style_text_font(g_card_expr, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(g_card_expr, UI_PX(198));
+    lv_obj_set_style_text_font(g_card_expr, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_card_expr, lv_color_hex(FD_C_DIM), 0);
-    lv_obj_align(g_card_expr, LV_ALIGN_TOP_LEFT, 30, 28);
+    lv_obj_align(g_card_expr, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(28));
 
     g_card_err = lv_label_create(card);
     lv_label_set_text(g_card_err, "");
     lv_obj_add_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(g_card_err, &font_cn_16, 0);
+    lv_obj_set_style_text_font(g_card_err, ui_font_body(), 0);
     lv_obj_set_style_text_color(g_card_err, lv_color_hex(FD_C_DANGER), 0);
-    lv_obj_align(g_card_err, LV_ALIGN_TOP_LEFT, 30, 28);
+    lv_obj_align(g_card_err, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(28));
 
     /* 零点 / 极值两行，有内容才显示（卡片高度随之变化）。 */
     g_card_point = lv_label_create(card);
     lv_label_set_text(g_card_point, "");
     lv_obj_add_flag(g_card_point, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(g_card_point, &font_cn_14, 0);
+    lv_obj_set_style_text_font(g_card_point, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_card_point, lv_color_hex(FD_C_ACCENT), 0);
-    lv_obj_align(g_card_point, LV_ALIGN_TOP_LEFT, 30, 46);
+    lv_obj_align(g_card_point, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(46));
 
     g_card_roots = lv_label_create(card);
     lv_label_set_text(g_card_roots, "");
     lv_obj_add_flag(g_card_roots, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(g_card_roots, &font_cn_14, 0);
+    lv_obj_set_style_text_font(g_card_roots, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_card_roots, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_align(g_card_roots, LV_ALIGN_TOP_LEFT, 30, 46);
+    lv_obj_align(g_card_roots, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(46));
 
     g_card_ext = lv_label_create(card);
     lv_label_set_text(g_card_ext, "");
     lv_obj_add_flag(g_card_ext, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(g_card_ext, &font_cn_14, 0);
+    lv_obj_set_style_text_font(g_card_ext, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_card_ext, lv_color_hex(FD_C_DIM), 0);
-    lv_obj_align(g_card_ext, LV_ALIGN_TOP_LEFT, 30, 64);
+    lv_obj_align(g_card_ext, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(64));
 }
 
 static void ensure_buffer(int w, int h)
