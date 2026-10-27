@@ -59,6 +59,16 @@ private const val ROW_H = 0.13f
 private const val ROUND_ROW_WIDTH = 0.84f
 
 /**
+ * 行尾箭头边长（占短边）。
+ *
+ * 和「长按设置」那一屏的入口行 `EntryRow` 用**同一个数**（SettingsScreen 里的
+ * `ENTRY_CHEVRON`，同样 0.050）：那边是 0.050、这里原来是 0.11，同一个箭头
+ * 在两屏里粗细差了一倍多 —— 用户说"按钮上面的箭头和原来的箭头不一样"，
+ * 统一到长按设置那一屏的口径。
+ */
+private const val CHEVRON_SIZE = 0.050f
+
+/**
  * 「开发者模式」子页。
  *
  * 入口只在开发者模式开着时出现（「更多设置」末尾）。这一屏三行：
@@ -323,11 +333,15 @@ private fun DevRow(
                 }
             }
             if (chevron) {
+                // 和「长按设置」那一屏的入口行完全一致：同一个 Icon（ArrowForward）、
+                // 同一个 tint（textMuted）、同一个 size（0.050 短边）。
+                // 原来这里写的是 0.11 —— 箭头在开发者模式里明显比长按设置里大一圈，
+                // 两屏并排看就不像同一个组件了。
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                     contentDescription = null,
                     tint = KeyPalette.textMuted,
-                    modifier = Modifier.size(metrics.sizeDp * 0.11f)
+                    modifier = Modifier.size(metrics.sizeDp * CHEVRON_SIZE)
                 )
             }
         }

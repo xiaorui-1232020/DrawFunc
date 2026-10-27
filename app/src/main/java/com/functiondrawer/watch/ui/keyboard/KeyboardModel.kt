@@ -589,7 +589,12 @@ private fun trigVariants(key: String): List<KeySpec> =
 private fun logVariants(): List<KeySpec> = listOf(logKey(), fn("ln"), fn("lg"))
 
 /**
- * 根号键：插入 `√()` 并退一格，光标落在括号里（和 [fn] 同一个约定）。
+ * 根号键：
+ *   * `√` / `∛` 插 `"√()"` / `"∛()"`，`cursorBack = 1` —— `editText` 的光标公式是
+ *     `光标 = 插入点 + 长度 − cursorBack`，长度 3 减 1 = 落在 `(` 之后、`)` 之前，
+ *     也就是**根号里面**（和 [fn] 的 `sin()` 同一条规则）；
+ *   * `ⁿ√` 插 `"root(,)"`，`cursorBack = 1` —— 长度 7 减 1 = 落在 `,` 之后、
+ *     `)` 之前，也就是**次数槽位**（见 [rootVariants]）。
  *
  * **为什么要带这对括号**（用户原话："让输入根号之后在解析里面自动带根号，
  * 不然根号里不能输整式，还要加一个看不见的括号才行"）：
@@ -597,7 +602,9 @@ private fun logVariants(): List<KeySpec> = listOf(logKey(), fn("ln"), fn("lg"))
  * 带上括号之后源码是 `√(x+1)`，而 `MathRender` 把 `√(...)` 的括号**吃掉**、
  * 只画一根要开方的横线 —— 看起来是手写根号，语义上却是一个"看不见的括号"。
  *
- * 退格会把 `√()` 一次删掉（见 [deleteRootCallBefore]），不会留下半截括号。
+ * 退格会把空骨架一次删掉（见 [deleteStructuralCallBefore] 的
+ * [STRUCTURAL_TEMPLATES]：符号式 `√()` 和函数式 `sqrt()` 都收），
+ * 不会留下半截括号。
  */
 private fun rootKey(label: String, insert: String): KeySpec =
     KeySpec(label, KeyAction.Insert(insert, cursorBack = 1))
@@ -752,13 +759,23 @@ private fun isNameBoundary(text: String, nameStart: Int): Boolean =
     nameStart == 0 || !text[nameStart - 1].isLetter()
 
 /**
- * 根号类按键插入的**空骨架**：`√()` / `∛()` / `root(,)`。
+ * 根号类 / 绝对值按键插入的**空骨架**：`√()` / `∛()` / `root(,)`，
+ * 以及它们的**函数式写法** `sqrt()` / `cbrt()` / `abs()`。
  *
  * 用户原话："像根号删除的时候就是一步删除，不要点击删除之后还露出来括号，
- * 把这个括号作隐式括号"。这三种骨架的括号是**看不见的**（排版层把它们吃掉了），
+ * 把这个括号作隐式括号"。这几种骨架的括号是**看不见的**（排版层把它们吃掉了），
  * 所以退格也必须把它们当成一个整体一次还回去 —— 否则屏幕上会先冒出半个括号。
+ *
+ * 为什么同一颗根号要收两种写法：键盘插的是符号式 `√()` / `∛()`，
+ * 而 `Latex.expand` 会把 LaTeX 的 `\sqrt{x}` 翻成函数式 `sqrt(x)`、
+ * 用户也可能直接打出 `cbrt()` / `abs()`。两者在排版层是同一棵结构
+ * （见 `MathRender` 的 `sqrt(...)` / `cbrt(...)` 分支），删除自然也要一致 ——
+ * 少一种写法，那种写法按退格就会先留下半截裸括号。
  */
-private val STRUCTURAL_TEMPLATES: List<String> = listOf("√()", "∛()", "root(,)")
+private val STRUCTURAL_TEMPLATES: List<String> = listOf(
+    "√()", "∛()", "root(,)",
+    "sqrt()", "cbrt()", "abs()"
+)
 
 /**
  * 光标左边是不是一个**完整的空骨架**（[STRUCTURAL_TEMPLATES] 之一），是就整段删掉。

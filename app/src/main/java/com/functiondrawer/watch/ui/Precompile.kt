@@ -370,7 +370,12 @@ internal fun PrecompileScreen(progress: Float, label: String, dayMode: Boolean =
             //   * 进度条：0.028 → 0.055（翻倍），百分比字号 fontTiny → fontSmall；
             //   * 名字：fontBody → fontTitle；
             //   * 下面"正在进行的项目"：fontTiny → fontSmall，并允许折两行。
-            val barHeight = metrics.sizeDp * 0.055f
+            //
+            // 2026-10-27 追加：用户说"图标改成圆形，进度条改细一点，粗度变成原来的一半"。
+            //   * 图标：调用 [AppMark] 时传 `circle = true`（欢迎页仍保持圆角方形）；
+            //   * 进度条：0.055 → 0.0275（正好一半）。圆角由 `h / 2` 推出来，
+            //     高度减半后两端自然还是胶囊，颜色与动画一律不动。
+            val barHeight = metrics.sizeDp * 0.0275f
             val percentWidth = metrics.sizeDp * 0.20f
 
             Column(
@@ -380,7 +385,8 @@ internal fun PrecompileScreen(progress: Float, label: String, dayMode: Boolean =
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                AppMark(size = metrics.sizeDp * 0.30f)
+                // 预编译这一屏要求圆形图标（和欢迎页的圆角方形区分开）
+                AppMark(size = metrics.sizeDp * 0.30f, circle = true)
                 Spacer(Modifier.height(metrics.sizeDp * 0.030f))
                 Text(
                     text = "DrawFunc",

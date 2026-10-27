@@ -467,6 +467,19 @@ internal fun TabDeck(
      */
     val hintBarPressed = remember { mutableStateOf(false) }
 
+    /**
+     * 这一串手势里**已经取过图**了没有。
+     *
+     * 2026-10-27（本轮）：用户原话"模糊背景现在的状态是按住提示条松手才刷新，
+     * 并且上拉抽屉有延迟，按照之前的改法改好。"
+     *
+     * 上一版把取图挪到松手，拖动全程背景是旧图 —— 观感就是"手在拉、背景还停在
+     * 上一张"，也就是用户说的延迟。现在改回**按下提示条那一刻**取（见
+     * `GraphScreen` 的 `freshBackdrop()` 调用），这里只记一个闩：
+     * 万一那一刻没取成（产线忙 / 没帧），松手打开时再补一张，绝不重复取。
+     */
+    var backdropTakenThisGesture = false
+
     val controller = remember {
         DrawerController(
             canPlay = {
@@ -478,6 +491,7 @@ internal fun TabDeck(
             setHintBarPressed = { hintBarPressed.value = it },
             freshBackdrop = {
                 frameHolder.request++
+                backdropTakenThisGesture = true
                 // ---- 3.36：这里才是"重新绘制一帧"的唯一入口 ----
                 //
                 // 用户原话：
@@ -535,23 +549,19 @@ internal fun TabDeck(
                         Route.Graph
                     }
                 )
-                // ---- 背景取图：**松手（且方向是打开）** 才做 ----
+                // ---- 背景取图：按下提示条时已经取过了，这里只兜底 ----
                 //
-                // 用户 2026-10-27 原话：
-                // > "滑动函数图像界面的提示条会卡，你做成之前那种样子。"
-                //
-                // 之前是在**按下那一刻**（`freshBackdrop`）就取图 + 起卷积线程：
-                // 一次 `GraphicsLayer.toImageBitmap()` 的 GPU 回读会在手指刚开始
-                // 拖动的那一拍压出十几毫秒，正好卡在拖动起手最敏感的位置。
-                // 现在挪到松手：拖动全程**零取图、零卷积**，恢复成原来顺滑的手感；
-                // 而取图源是 `GraphCapture`（只录画布内容），抽屉已经盖上来也不影响
-                // 拍到的仍是完整清晰的函数图，所以观感上依然是"滑到一半背景就换了"。
-                //
-                // 收起方向（open == false）不需要新背景：图像界面本来就在眼前。
-                if (open) {
+                // 2026-10-27（本轮）：上一版把取图整个挪到松手，用户反馈
+                // "按住提示条松手才刷新 / 上拉抽屉有延迟" —— 拖动全程背景是旧图。
+                // 现在按下提示条的那一刻就取（`GraphScreen` 里调 `freshBackdrop`），
+                // 拖动全程背景已经是这一张，跟手就没有延迟了。
+                // 这里只在"那一刻没取成"（产线忙 / 等不到帧）时补一张，绝不重复：
+                // 两次 GPU 回读叠在一起才是真正的卡顿源。
+                if (open && !backdropTakenThisGesture) {
                     frameHolder.request++
                     BackdropImage.request?.invoke()
                 }
+                backdropTakenThisGesture = false
             }
         )
     }

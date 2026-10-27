@@ -453,15 +453,44 @@ private class Parser(private val toks: List<Tok>, private val srcLen: Int) {
                 if (atOp(")")) eat()
                 return MSqrt(body, index, indexStart, bodyStart)
             }
-            // sqrt(...) 吃成根号：它和 `^` 一样是**结构**，不能按普通函数名排
+            // sqrt(...) 吃成根号：它和 `^` 一样是**结构**，不能按普通函数名排。
+            //
+            // 这里是**函数式写法**（`sqrt(x)`、以及 `Latex.expand` 把 `\sqrt{x}`
+            // 翻出来的结果），和上面键盘插的 `√(...)` 是同一颗根号的两种源码形式。
+            // 两种都必须带 `bodyStart`：括号在排版层是**隐式**的、不画出来，
+            // 空的时候只能靠这个下标留一块可点的槽位。少了它，`sqrt()` 既画不出
+            // 可输入的阴影，也登记不了光标停靠点 —— 用户点哪儿都会被 `indexAt`
+            // 兜底成 0（根号**前面**），这就是"根号下不能输入内容"的真因。
             if (lower == "sqrt" && p + 1 < toks.size &&
                 toks[p + 1].kind == TokKind.OP && toks[p + 1].text == "("
             ) {
                 eat() // sqrt
                 eat() // (
+                val bodyStart = toks[p].start
                 val body = parseSum()
                 if (atOp(")")) eat()
-                return MSqrt(body)
+                return MSqrt(body, bodyStart = bodyStart)
+            }
+            // cbrt(...) 是立方根的函数式写法（LaTeX 的 `\sqrt[3]{x}` 会翻成
+            // `root(x,3)`，不经过这里；但用户自己打 `cbrt(x)` 时也该画成根号）。
+            // 指数固定是 3、**不占源码位置**（sourceLen = 0），和键盘上那颗 `∛`
+            // 完全一致 —— 所以退格删不到那个 3，屏幕上也不出现可编辑的 "3"。
+            // 少了这个分支，输入框里会原样显示 `cbrt(x)` 四个字母，而不是根号。
+            if (lower == "cbrt" && p + 1 < toks.size &&
+                toks[p + 1].kind == TokKind.OP && toks[p + 1].text == "("
+            ) {
+                val head = eat() // cbrt
+                eat() // (
+                val bodyStart = toks[p].start
+                val body = parseSum()
+                if (atOp(")")) eat()
+                return MSqrt(
+                    body = body,
+                    index = MRow(
+                        listOf(MLeaf("3", GlyphStyle.UPRIGHT, head.start, sourceLen = 0))
+                    ),
+                    bodyStart = bodyStart
+                )
             }
             // abs(...) 排成竖线，比 `abs` 三个字母更像数学
             if (lower == "abs" && p + 1 < toks.size &&
@@ -983,8 +1012,16 @@ private class Measurer(
                 else -> 0f
             }
             val idxGap = if (idxW > 0f) sizePx * ROOT_INDEX_GAP else 0f
+            // 被开方数是空的时候（`sqrt()` / `√()` 刚按下去）要按槽位宽度**预留体积**：
+            // 绘制阶段会画一块 `SLOT_W` 宽的阴影，测量时不给宽度的话那块阴影会
+            // 伸出根号横线之外、压到后面的字符上（"阴影没有占位体积"的老问题）。
+            val bodyW = if (slot != SlotStyle.NONE && n.body.isBlank() && n.bodyStart >= 0) {
+                max(body.w, sizePx * SLOT_W)
+            } else {
+                body.w
+            }
             Size(
-                w = idxW + idxGap + hook + body.w + pad,
+                w = idxW + idxGap + hook + bodyW + pad,
                 asc = body.h + pad * 2 + (if (idxW > 0f) idxSize * 0.78f else 0f),
                 desc = sizePx * 0.12f
             )
@@ -1167,7 +1204,11 @@ private class MathLayoutBuilder(
     }
 
     private fun endIndexOf(n: MNode): Int? = when (n) {
-        is MLeaf -> if (n.text.isEmpty()) null else n.start + sourceLenOf(n)
+        // `sourceLen == 0` 的字形是**结构造出来的**（`∛` / `cbrt(...)` 左上角那个固定的 3），
+        // 它在源码里不占位置。要是把它算进"行末下标"，排版层就会在整棵根号的右边缘
+        // 登记一个假停靠点（下标 1）—— 点根号左边会得到"插进函数名中间"的非法光标。
+        is MLeaf -> if (n.text.isEmpty() || n.sourceLen == 0) null
+                    else n.start + sourceLenOf(n)
         is MRow -> lastSourceIndex(n.items)
         is MFrac -> maxOfNotNull(endIndexOf(n.num), endIndexOf(n.den))
         is MSup -> maxOfNotNull(
@@ -1215,9 +1256,13 @@ private class MathLayoutBuilder(
                 val w = measurer.textWidth(n.text, sizePx, n.style)
                 val top = baseline - sizePx * 0.78f
                 val bottom = baseline + sizePx * 0.22f
-                // 起点和终点各一个停靠点：拖到字的左半边/右半边都能对上
-                stops += Stop(n.start, x, top, bottom)
-                stops += Stop(min(n.start + sourceLenOf(n), srcLen), x + w, top, bottom)
+                // 起点和终点各一个停靠点：拖到字的左半边/右半边都能对上。
+                // `sourceLen == 0` 的人造字形（`∛`/`cbrt` 的 3）跳过：它没有源码位置，
+                // 登记了就会在根号左上角多出两个假停靠点（点那儿会把光标插进函数名里）。
+                if (n.sourceLen > 0) {
+                    stops += Stop(n.start, x, top, bottom)
+                    stops += Stop(min(n.start + sourceLenOf(n), srcLen), x + w, top, bottom)
+                }
             }
 
             is MRow -> {
@@ -1284,6 +1329,13 @@ private class MathLayoutBuilder(
                 val botY = top + body.h + pad * 0.55f
                 // 勾的上沿（横线起点）和"肩"的位置，参照 TeX 的 radical 比例
                 val shoulderY = top + body.h * 0.52f
+                // 空被开方数时横线要盖住那块槽位（和 Measurer 的 SLOT_W 同一个口径），
+                // 否则阴影会露在根号横线外面。
+                val bodyW = if (slot != SlotStyle.NONE && n.body.isBlank() && n.bodyStart >= 0) {
+                    max(body.w, sizePx * SLOT_W)
+                } else {
+                    body.w
+                }
 
                 // 一道连续路径（不是三段直线）：拐角靠 StrokeJoin.Round 收圆，
                 // 观感是"一支笔写下来的 √"，而不是"对勾 + 横线"
@@ -1298,7 +1350,7 @@ private class MathLayoutBuilder(
                 // 横线：从勾顶一直拉到被开方内容末尾（略向右探出一点，像 TeX）
                 rules += Rule(
                     left + hook * 0.96f, top,
-                    left + hook + body.w + pad * 1.2f, top,
+                    left + hook + bodyW + pad * 1.2f, top,
                     stroke
                 )
 
@@ -1323,19 +1375,25 @@ private class MathLayoutBuilder(
 
                 // ---- 被开方内容 ----
                 if (n.body.isBlank()) {
-                    // 空被开方数：同样留一块槽位，免得"按了根号什么都没出现"
-                    val bx = left + hook + pad * 0.3f
-                    val bw = sizePx * 0.55f
-                    addSlot(
-                        x = bx,
-                        y = top + pad * 0.6f,
-                        w = bw,
-                        h = body.h.coerceAtLeast(sizePx * 0.8f),
-                        stroke = max(1f, stroke * 0.75f)
-                    )
+                    // 空被开方数：留一块槽位，免得"按了根号什么都没出现"。
+                    // 只有带 bodyStart 的根号（`√()` / `sqrt()` / `root(,)`）才有槽位 ——
+                    // 没有下标的空根号是无处输入的，画了槽位也点不中。
                     if (n.bodyStart >= 0) {
+                        val bx = left + hook + pad * 0.3f
+                        addSlot(
+                            x = bx,
+                            y = top + pad * 0.6f,
+                            w = bodyW,
+                            h = body.h.coerceAtLeast(sizePx * 0.8f),
+                            stroke = max(1f, stroke * 0.75f)
+                        )
                         val cy = top + body.h * 0.5f
-                        stops += Stop(n.bodyStart, bx + bw / 2f, cy - body.h * 0.4f, cy + body.h * 0.4f)
+                        stops += Stop(
+                            n.bodyStart,
+                            bx + bodyW / 2f,
+                            cy - body.h * 0.4f,
+                            cy + body.h * 0.4f
+                        )
                     }
                 } else {
                     layoutRow(n.body, left + hook, baseline, sizePx)

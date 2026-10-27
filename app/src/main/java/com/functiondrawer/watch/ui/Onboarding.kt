@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Icon
@@ -499,15 +500,21 @@ private fun WelcomeChoice(
  * `Only VectorDrawables and rasterized asset types are supported`。
  * 所以这里用 `ImageVector.vectorResource` 读**前景矢量**，再自己铺背景 ——
  * 得到的画面和系统裁出来的图标一致（自适应图标就是这么合成的）。
+ *
+ * @param circle 是否裁成正圆。默认 false（保持启动器图标的圆角方形蒙版），
+ *   只有预编译界面要求"图标改成圆形"时传 true —— 欢迎页仍按默认的圆角方形显示。
+ *   之所以放在这里而不是在调用点外面再套一层 `Modifier.clip`：内部已经
+ *   `.clip(RoundedCornerShape(...))` 裁过一次，外面再裁是无效的。
  */
 @Composable
-internal fun AppMark(size: Dp) {
+internal fun AppMark(size: Dp, circle: Boolean = false) {
     val foreground = ImageVector.vectorResource(id = R.drawable.ic_launcher_foreground)
     Box(
         modifier = Modifier
             .size(size)
-            // 启动器的图标蒙版是圆角方形（圆表上系统再裁圆），这里用同一比例。
-            .clip(RoundedCornerShape(size * 0.28f))
+            // 默认：启动器的图标蒙版是圆角方形（圆表上系统再裁圆），这里用同一比例。
+            // circle = true 时改成正圆（预编译界面用），底下自绘背景也随之变圆。
+            .clip(if (circle) CircleShape else RoundedCornerShape(size * 0.28f))
             .background(LauncherIconBackground),
         contentAlignment = Alignment.Center
     ) {

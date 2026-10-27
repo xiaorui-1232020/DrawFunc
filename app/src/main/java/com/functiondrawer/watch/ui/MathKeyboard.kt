@@ -1009,12 +1009,19 @@ private fun KeyButton(
                     // 这里不能按整颗键的高度算 —— 图标只占中间一小块，
                     // 横线要贴着**字形下沿**（基线再往下一点），否则会跑到键底。
                     if (onLongClick != null) {
+                        // 用户 2026-10-27："可以长按的按钮下面的细线的长度和宽度都做成原来的两倍。"
+                        // 原来跨度是图标宽的 0.16~0.84（以图标中心算半长 0.34），
+                        // 所以长度翻倍 = 半长 0.34×2，仍以**图标中线**对称；
+                        // 再用 coerceIn 夹到 `[0, size.width]` —— 用户要求"超宽就截到键内"，
+                        // 免得图标本身比键宽时横线画到键外。
                         val y = iconY + icon.ascent + 2f
+                        val cx = iconX + icon.width / 2f
+                        val half = icon.width * 0.34f * 2f
                         drawLine(
                             color = content.copy(alpha = 0.35f),
-                            start = Offset(iconX + icon.width * 0.16f, y),
-                            end = Offset(iconX + icon.width * 0.84f, y),
-                            strokeWidth = 1.2f
+                            start = Offset((cx - half).coerceIn(0f, size.width), y),
+                            end = Offset((cx + half).coerceIn(0f, size.width), y),
+                            strokeWidth = 2.4f
                         )
                     }
                 }
@@ -1044,11 +1051,16 @@ private fun KeyButton(
                         drawContent()
                         // 基线 + 2px = 字形下沿；量不到基线时退回老算法。
                         val y = if (textBaseline > 0f) textBaseline + 2f else size.height * 0.86f
+                        // 同样是 2026-10-27 的"长度和宽度都翻倍"：原来半长是键宽的 0.22
+                        //（0.28~0.72，跨度 0.44），翻倍后半长 0.44（0.06~0.94），
+                        // 依然以**键中线**对称；coerceIn 只是兜底，保证任何键宽下都不越界。
+                        val cx = size.width / 2f
+                        val half = size.width * 0.22f * 2f
                         drawLine(
                             color = content.copy(alpha = 0.35f),
-                            start = Offset(size.width * 0.28f, y),
-                            end = Offset(size.width * 0.72f, y),
-                            strokeWidth = 1.2f
+                            start = Offset((cx - half).coerceIn(0f, size.width), y),
+                            end = Offset((cx + half).coerceIn(0f, size.width), y),
+                            strokeWidth = 2.4f
                         )
                     }
                 } else {

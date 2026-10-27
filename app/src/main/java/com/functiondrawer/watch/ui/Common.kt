@@ -52,10 +52,15 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1090,10 +1095,11 @@ internal fun Modifier.pressInsideGuard(guard: PressInsideGuard): Modifier = poin
 // ---------------------------------------------------------------------------
 
 /**
- * 玻璃"光泽 + 悬浮影"：顶部一道白色渐变 + 一圈 1dp 亮边 + **按钮下方一层柔和的投影**。
+ * 玻璃"光泽 + 悬浮影"：上下两沿各一道很窄的白色高光 + 一圈 1dp 细亮边 + **按钮下方一层柔和的投影**。
  *
  * 这是 ColorOS 16 / iOS 26 那套液态玻璃最容易被认出来的三笔 ——
- * 半透明底色谁都会做，**有光沿着上边缘扫过去、底下还有一层影把它托起来**才像玻璃。
+ * 半透明底色谁都会做，**有光沿着上边缘擦过去、底下还有一层影把它托起来**才像玻璃。
+ * 中间区域一律不画东西，玻璃感来自边缘，不来自明暗。
  *
  * ### 为什么投影自己画，不用 `Modifier.shadow`
  *
@@ -1105,7 +1111,7 @@ internal fun Modifier.pressInsideGuard(guard: PressInsideGuard): Modifier = poin
  * 强度直接乘「按钮下阴影强度」那一档，夜里也能看清。
  *
  * 画在内容之**后**（`drawWithContent` 里先 drawContent 再画光泽），
- * 所以它也会轻轻扫过文字；alpha 控制在 0.14 以下，不影响可读性。
+ * 所以它也会轻轻扫过文字；alpha 控制在 0.28 以下，不影响可读性。
  * 不用离屏层、不读任何状态，成本就是几条绘制指令。
  *
  * @param shape 按钮的形状（本 App 一律是 [PillShape]）
@@ -1135,43 +1141,53 @@ fun Modifier.glassSurface(shape: Shape, elevation: Dp = 5.dp): Modifier {
             if (h <= 0f || w <= 0f) return@drawBehind
             // 强度 0 → 一个字节都不画（用户要求"0 时按钮下没有阴影"）
             if (shadowBase <= 0.001f) return@drawBehind
-            // ColorOS 16 的悬浮感 = "更散的环境影（往下偏）+ 一圈贴边的接触影"。
-            // 没有离屏模糊，就用 3 层同心圆角矩形叠出柔边：越外越大、越淡。
-            val drop = elevation.toPx() * 0.5f + h * 0.05f
-            for (i in 3 downTo 1) {
-                val grow = h * 0.04f * i
-                drawRoundRect(
-                    color = Color.Black.copy(alpha = shadowBase * 0.42f / i),
-                    topLeft = Offset(-grow * 0.5f, drop - grow * 0.5f + h * 0.02f),
-                    size = Size(w + grow, h + grow),
-                    cornerRadius = CornerRadius((h + grow) * 0.5f)
+            // 2026-10-27（本轮）：旧写法是 3 层同心矩形 + 一道 80% 宽的"接触影"，
+            // 用户原话"按钮下的阴影一点都不自然，要有阴影渐变的过渡"——
+            // 三层之间 alpha 跳得太大，那道 80% 宽的窄影更像在底下贴了一根黑条。
+            // 现在改成 6 层：alpha 按 1/i 递减（最外层到 0.02 量级），
+            // 每层等比外扩并整体下移，叠起来才是连续的软边；
+            // 最贴身的一层再往下收一点，接触影自然聚在底沿，不再单独画黑条。
+            val drop = elevation.toPx() * 0.5f + h * 0.06f
+            // 按钮面是半透明的（夜里面只有 13%），影如果画在下面会透过玻璃
+            // 把中间压暗 —— 用户要的是"中间透明"，所以把按钮自身的胶囊挖掉，
+            // 影只落在按钮外面，中间什么都不留。
+            val hole = Path().apply {
+                addRoundRect(
+                    RoundRect(rect = Rect(0f, 0f, w, h), cornerRadius = CornerRadius(h * 0.5f))
                 )
             }
-            // 贴下缘的一层"接触影"：让按钮看起来真的落在底上（只剩薄薄一条）。
-            drawRoundRect(
-                color = Color.Black.copy(alpha = shadowBase * 0.22f),
-                topLeft = Offset(w * 0.10f, h * 0.92f),
-                size = Size(w * 0.80f, h * 0.10f),
-                cornerRadius = CornerRadius(h * 0.05f)
-            )
+            clipPath(hole, ClipOp.Difference) {
+                // 6 层，i 越大越外扩、越淡；圆角永远取半高 = 同一个胶囊的投影。
+                for (i in 6 downTo 1) {
+                    val grow = h * 0.03f * i
+                    // 越靠近按钮的一层越往下收：接触影落到底沿，而不是上沿也发黑
+                    val tighten = h * 0.012f * (6 - i)
+                    drawRoundRect(
+                        color = Color.Black.copy(alpha = shadowBase * 0.30f / i),
+                        topLeft = Offset(-grow * 0.5f, drop + tighten - grow * 0.5f),
+                        size = Size(w + grow, h + grow),
+                        cornerRadius = CornerRadius((h + grow) * 0.5f)
+                    )
+                }
+            }
         }
         // ⚠️ border 必须在**内容**的最外层：Compose 的绘制顺序是内层先画，
         // border 放里面会被背景和光泽盖住（就是"按钮没有玻璃边框"的原因）。
         //
         // 2026-10-27（本轮，参照手表 ColorOS 16 的开关磁贴）：
-        // 那套按钮最显著的特征不是"很重的投影"，而是
-        //   * 一圈**整圈都亮**的细边（上亮 → 中间略暗 → 下沿再亮回来）；
-        //   * 面本身几乎不透明，只在上下两沿各有一道很窄的高光；
-        //   * 中间偏暗一点，于是整块面看着像"有厚度"的玻璃砖。
-        // 旧写法只有顶部一道 16% 的宽渐变，出来像一块塑料片。
+        // 用户截图里的按钮是——**中间近乎透明**、一圈很细的亮边、
+        // 上下沿各一道窄窄的高光。玻璃感全部来自"边"，不是来自"中间压暗"。
+        // 上一版在中间铺了一层 52% 的暗部，用户反馈"不像玻璃，像金属"——
+        // 金属才靠明暗体积，玻璃靠透光和边缘折射。
         .border(
             width = 1.dp,
             brush = Brush.verticalGradient(
-                // 夜间：白 62% → 20% → 34%（深色底上的边缘高光）
-                // 白天：白 95% → 45% → 62%（浅色底上要靠"更白"才看得出边）
-                0f to Color.White.copy(alpha = if (light) 0.95f else 0.62f),
-                0.5f to Color.White.copy(alpha = if (light) 0.45f else 0.20f),
-                1f to Color.White.copy(alpha = if (light) 0.62f else 0.34f)
+                // 只画一条 1dp 的细边，不做厚边框（厚了就又变回金属倒角）。
+                // 夜间：白 55% → 16% → 28%（深色底上，靠上亮下回光勾出轮廓）
+                // 白天：白 92% → 40% → 55%（浅色底上要靠"更白"才看得出边）
+                0f to Color.White.copy(alpha = if (light) 0.92f else 0.55f),
+                0.5f to Color.White.copy(alpha = if (light) 0.40f else 0.16f),
+                1f to Color.White.copy(alpha = if (light) 0.55f else 0.28f)
             ),
             shape = shape
         )
@@ -1181,38 +1197,30 @@ fun Modifier.glassSurface(shape: Shape, elevation: Dp = 5.dp): Modifier {
             val h = size.height
             val w = size.width
             if (h <= 0f || w <= 0f) return@drawWithContent
-            // ① 顶部高光（窄，只占上沿 34%）：白 20% → 3%
+            // ① 上沿高光：只占上沿 20%，白 16%（白天 28%）→ 0。
+            // 窄是因为光只擦过玻璃的上棱，铺宽了就变成"白色渐变塑料"。
             drawRect(
                 brush = Brush.verticalGradient(
-                    0f to Color.White.copy(alpha = if (light) 0.60f else 0.20f),
+                    0f to Color.White.copy(alpha = if (light) 0.28f else 0.16f),
                     1f to Color.Transparent,
                     startY = 0f,
-                    endY = h * 0.34f
+                    endY = h * 0.20f
                 ),
-                size = Size(w, h * 0.34f)
+                size = Size(w, h * 0.20f)
             )
-            // ② 底沿回光（ColorOS 那套的"下厚上薄"）：白 0% → 12%
+            // ② 下沿回光：占底部 15%，0 → 白 6%（白天 14%）。
+            // 比上沿更淡，只用来让胶囊的"下棱"也有一点点反光。
             drawRect(
                 brush = Brush.verticalGradient(
                     0f to Color.Transparent,
-                    1f to Color.White.copy(alpha = if (light) 0.34f else 0.12f),
-                    startY = h * 0.74f,
+                    1f to Color.White.copy(alpha = if (light) 0.14f else 0.06f),
+                    startY = h * 0.85f,
                     endY = h
                 ),
-                topLeft = Offset(0f, h * 0.74f),
-                size = Size(w, h * 0.26f)
+                topLeft = Offset(0f, h * 0.85f),
+                size = Size(w, h * 0.15f)
             )
-            // ③ 中间的"体积暗部"：极淡一层，让上下两道高光之间有落差
-            drawRect(
-                brush = Brush.verticalGradient(
-                    0f to Color.Transparent,
-                    0.5f to Color.Black.copy(alpha = if (light) 0.05f else 0.09f),
-                    1f to Color.Transparent,
-                    startY = h * 0.28f,
-                    endY = h * 0.80f
-                ),
-                topLeft = Offset(0f, h * 0.28f),
-                size = Size(w, h * 0.52f)
-            )
+            // ③ 中间**什么都不画**：让按钮自己的半透明底色（以及它身后的画面）透出来。
+            // 这里一旦叠暗部，半透明的面就会变成一块实心深色 —— 那就是"金属"。
         }
 }

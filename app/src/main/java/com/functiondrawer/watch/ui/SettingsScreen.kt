@@ -537,28 +537,50 @@ fun MoreSettingsScreen(
     /** 背后有没有模糊背景可透（见 [SettingsScaffold] 的同名参数）。 */
     backdropVisible: Boolean = false
 ) {
-    SettingsScaffold(
-        entries = listOf(
-            SettingEntry.Nav("手表适配", onCrown),
-            // 「计算设置」紧跟在「手表适配」下面（用户指定的位置）
-            SettingEntry.Nav("计算设置", onCalc),
-            SettingEntry.Nav("触摸设置", onTouch),
-            SettingEntry.Nav("主题设置", onTheme),
-            SettingEntry.Nav("应用信息", onAbout),
-            // 教程的入口藏在这里：退出教程的确认框里就写着这句指路。
-            SettingEntry.Nav("重温新手教程", onReplayTutorial)
-        ) + if (developerMode) {
-            // 入口只在开发者模式开着时出现；关掉它的那一刻就退出这一屏，
-            // 所以这里不会出现"点了之后入口还在"的中间态。
-            listOf(SettingEntry.Nav("开发者模式", onDeveloper))
-        } else {
-            emptyList()
-        },
-        metrics = metrics,
-        onBack = onBack,
-        rotary = rotary,
-        backdropVisible = backdropVisible
-    )
+    // 「重温新手教程」原来点了就从头开始；用户要求先给一个确定界面。
+    // 这里只负责"问一句"，确认后仍然走原来的 `onReplayTutorial`（启动方式不变）。
+    var replayConfirm by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        SettingsScaffold(
+            entries = listOf(
+                SettingEntry.Nav("手表适配", onCrown),
+                // 「计算设置」紧跟在「手表适配」下面（用户指定的位置）
+                SettingEntry.Nav("计算设置", onCalc),
+                SettingEntry.Nav("触摸设置", onTouch),
+                SettingEntry.Nav("主题设置", onTheme),
+                SettingEntry.Nav("应用信息", onAbout),
+                // 教程的入口藏在这里：退出教程的确认框里就写着这句指路。
+                SettingEntry.Nav("重温新手教程") { replayConfirm = true }
+            ) + if (developerMode) {
+                // 入口只在开发者模式开着时出现；关掉它的那一刻就退出这一屏，
+                // 所以这里不会出现"点了之后入口还在"的中间态。
+                listOf(SettingEntry.Nav("开发者模式", onDeveloper))
+            } else {
+                emptyList()
+            },
+            metrics = metrics,
+            onBack = onBack,
+            rotary = rotary,
+            backdropVisible = backdropVisible
+        )
+
+        // 确认卡复用教程退出确认那一张（[TutorialConfirmCard]），不另做一套样式。
+        if (replayConfirm) {
+            TutorialConfirmCard(
+                metrics = metrics,
+                style = rememberTutorialStyle(),
+                title = "重温新手教程？",
+                body = "会从新建函数开始 再走一遍画图、存文件和改设置。",
+                confirmText = "开始",
+                confirmBackground = KeyPalette.accent,
+                onCancel = { replayConfirm = false },
+                onConfirm = {
+                    replayConfirm = false
+                    onReplayTutorial()
+                }
+            )
+        }
+    }
 }
 
 // ===========================================================================

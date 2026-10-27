@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.functiondrawer.watch.ui.keyboard.KeyPage
 import com.functiondrawer.watch.ui.theme.PillShape
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 // ---------------------------------------------------------------------------
@@ -72,7 +74,7 @@ import kotlin.math.roundToInt
 // 这一套东西分成四块：
 //   1. [TutorialAnchors]：界面各处把"某个控件在屏幕上的矩形"报到一张表里，
 //      教程浮层据此画出高亮圈（**不靠 id 猜位置**，界面改版面教程自动跟上）；
-//   2. [Tutorial]：37 步的**状态机**。推进只有两条路 —— 用户点到了某个锚点控件
+//   2. [Tutorial]：38 步的**状态机**。推进只有两条路 —— 用户点到了某个锚点控件
 //      （界面里上报 signal），或者路由变了（onRoute 的规则表）；
 //   3. [TutorialOverlay]：纯浮层。**没有碰撞体积**：除了卡片里的三颗胶囊按钮，
 //      卡片本身不拦触摸；高亮圈之外铺四块"挡板"把散落的触摸吃掉；
@@ -109,7 +111,7 @@ internal enum class TutorialCardSpot { TOP, BOTTOM, CENTER, BELOW, ABOVE }
  *               空 = 这一步等用户操作或路由推进。
  * @param signal 推进信号名。`Tutorial.report(signal)` 命中才会 `advance()`；
  *               空串 = 这一步不靠 signal（靠路由或自动动作）。
- * @param autoFillName 保存对话框里要自动填进去的文件名（第 23 步用 "test"）。
+ * @param autoFillName 保存对话框里要自动填进去的文件名（第 24 步用 "test"）。
  */
 internal data class TutorialStep(
     val title: String,
@@ -160,7 +162,7 @@ internal object TutorialAnchors {
     /** 「函数行本体」——左滑删除时高亮整行。 */
     fun row(id: Long): String = "row_$id"
 
-    /** 「文件列表里的一行」——按不带扩展名的文件名区分（第 28~30 步的 test）。 */
+    /** 「文件列表里的一行」——按不带扩展名的文件名区分（第 29~31 步的 test）。 */
     fun savesRow(baseName: String): String = "saves_row_$baseName"
 
     fun report(id: String, rect: Rect) {
@@ -229,7 +231,7 @@ internal object Tutorial {
     var revealVersion by mutableStateOf(0)
         private set
 
-    /** 第 26 步（自动滚工具列表）期间禁止用户自己滑列表。 */
+    /** 第 27 步（自动滚工具列表）期间禁止用户自己滑列表。 */
     var blocksScroll by mutableStateOf(false)
 
     // ---- 交给界面的钩子 ----
@@ -251,14 +253,14 @@ internal object Tutorial {
     /** 把编辑器的键盘切到某一页（撤销第 5 步用）。 */
     var setEditorPage: ((KeyPage) -> Unit)? = null
 
-    /** 恢复文件列表的选中状态（撤销第 26/27 步用）。 */
+    /** 恢复文件列表的选中状态（撤销第 27/28 步用）。 */
     var onRestoreSavesSelection: ((SavesRestore) -> Unit)? = null
 
     /** 把教程期间"名义删除"掉的文件放回来。 */
     var onRestoreDeletedFile: (() -> Unit)? = null
 
     /**
-     * 第 26 步的自动滚动。
+     * 第 27 步的自动滚动。
      *
      * `LazyListState` 只有功能界面自己拿得到，所以由它登记这段动作，
      * 压暗幕 / 挡手指 / 播完推进仍归状态机（GraphScreen 的编排）管。
@@ -307,10 +309,10 @@ internal object Tutorial {
             }
         }
 
-    /** 第 23 步要自动填进保存对话框的文件名。 */
+    /** 第 24 步要自动填进保存对话框的文件名。 */
     fun autoFillName(): String? = currentSpec?.autoFillName
 
-    // ---- 37 步 ----
+    // ---- 38 步 ----
     val steps: List<TutorialStep> = listOf(
         TutorialStep(
             "从一条曲线开始",
@@ -428,6 +430,18 @@ internal object Tutorial {
             TutorialGesture.TAP,
             anchor = TutorialAnchors.UNDO_BUTTON,
             signal = "undo_done"
+        ),
+        // 撤销之后、点设置之前插的一步：撤销键还开着，用同一套"两颗键之间横划"
+        // 手势把它收起来（划到另一颗键就是切换菜单，见 `rememberToolbarUndoMenu`）。
+        // 锚点取 TOOLBAR —— 它是"⚙ 与 + 两颗键 + 中间的撤销菜单"合起来的矩形，
+        // 比单指某一颗键更贴合"从 + 划向齿轮"这条轨迹。
+        TutorialStep(
+            "隐藏撤销",
+            "从 + 划向齿轮 撤销键就收起来了。",
+            TutorialGesture.SWIPE_LEFT,
+            spot = TutorialCardSpot.BOTTOM,
+            anchor = TutorialAnchors.TOOLBAR,
+            signal = "undo_menu_closed"
         ),
         TutorialStep(
             "短按齿轮看设置",
@@ -619,11 +633,22 @@ internal object Tutorial {
     /** 退回上一步，并让界面把上一步的**实际操作**撤掉。 */
     fun back() {
         if (!active || step <= 0) return
-        onUndoStep?.invoke(step - 1)
+        val undone = step - 1
+        // 步骤表在"撤销"与"设置"之间插了一步（"隐藏撤销"），所以 17 及之后的新步号
+        // 都比 [Tutorial.onUndoStep] 那张旧表（写在 GraphScreen 里，按插入前的步号）
+        // 大 1 —— 交回去之前先减掉，否则"上一步"会撤错一步。
+        onUndoStep?.invoke(if (undone >= STEPS_SHIFTED_FROM) undone - 1 else undone)
         resetStepVisuals()
         step--
         revision++
     }
+
+    /**
+     * 从这一步起，步号比 [Tutorial.onUndoStep] 的旧表大 1。
+     *
+     * 只用于 [back] 里那次换算；以后若再往中间插步骤，这里和那张表要一起改。
+     */
+    private const val STEPS_SHIFTED_FROM = 17
 
     private fun resetStepVisuals() {
         spotlight = false
@@ -706,25 +731,25 @@ internal object Tutorial {
             7 -> route is Route.Graph && prev is Route.Editor
             // 9：抽屉拉上来
             9 -> route is Route.List
-            // 17：短按齿轮 → 设置
-            17 -> route is Route.Settings
-            // 19：设置返回 → 列表（上一屏必须是设置）
-            19 -> route is Route.List && prev is Route.Settings
-            // 21：再把抽屉拉上来（第 20 步由教程自己把抽屉收回去看坐标数字，
+            // 18：短按齿轮 → 设置（第 17 步"隐藏撤销"靠 signal 推进）
+            18 -> route is Route.Settings
+            // 20：设置返回 → 列表（上一屏必须是设置）
+            20 -> route is Route.List && prev is Route.Settings
+            // 22：再把抽屉拉上来（第 21 步由教程自己把抽屉收回去看坐标数字，
             //     所以这里认的是"抽屉又展开了"）
-            21 -> route is Route.List
-            // 25：左滑 → 功能界面
-            25 -> route is Route.Tools
-            // 27：打开函数文件
-            27 -> route is Route.Saves
-            // 32：文件列表返回 → 功能界面
-            32 -> route is Route.Tools
-            // 33：右滑 → 函数列表
-            33 -> route is Route.List
-            // 34：长按齿轮 → 更多设置
-            34 -> route is Route.MoreSettings
-            // 35：主题设置
-            35 -> route is Route.ThemeSettings
+            22 -> route is Route.List
+            // 26：左滑 → 功能界面
+            26 -> route is Route.Tools
+            // 28：打开函数文件
+            28 -> route is Route.Saves
+            // 33：文件列表返回 → 功能界面
+            33 -> route is Route.Tools
+            // 34：右滑 → 函数列表
+            34 -> route is Route.List
+            // 35：长按齿轮 → 更多设置
+            35 -> route is Route.MoreSettings
+            // 36：主题设置
+            36 -> route is Route.ThemeSettings
             else -> false
         }
         if (advanced) {
@@ -741,15 +766,17 @@ internal object Tutorial {
         7 -> route is Route.Editor || route is Route.Graph
         8 -> route is Route.Graph
         in 9..16 -> route is Route.List
-        17, 18 -> route is Route.Settings
-        in 19..20 -> route is Route.List || route is Route.Graph
-        21 -> route is Route.Graph
-        in 22..24 -> route is Route.List
-        in 25..26 -> route is Route.Tools
-        in 27..31 -> route is Route.Saves
-        32 -> route is Route.Tools
-        33 -> route is Route.Tools || route is Route.List
-        34 -> route is Route.MoreSettings
+        // 17：插进来的"隐藏撤销"仍在函数列表上（用户提前点齿轮会被 fail 退回）
+        17 -> route is Route.List
+        18, 19 -> route is Route.Settings
+        in 20..21 -> route is Route.List || route is Route.Graph
+        22 -> route is Route.Graph
+        in 23..25 -> route is Route.List
+        in 26..27 -> route is Route.Tools
+        in 28..32 -> route is Route.Saves
+        33 -> route is Route.Tools
+        34 -> route is Route.Tools || route is Route.List
+        35 -> route is Route.MoreSettings
         else -> true
     }
 
@@ -793,9 +820,29 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
     // 2026-10-27：用户报"新手教程的界面阴影蒙版没了"。
     // 旧写法只在 `Tutorial.spotlight`（自动编排那几步）时才压 0.5，
     // 其余步骤是 0 —— 于是教程期间背景和平时一样亮，看起来"没有蒙版"。
-    // 现在**每一步都压一层**：普通步骤 0.30、自动编排步骤 0.5。
-    val dim by animateFloatAsState(
-        targetValue = if (Tutorial.spotlight) 0.5f else style.scrim,
+    // 现在**每一步都压一层**：普通步骤 style.scrim、自动编排步骤 0.5。
+    //
+    // 绘制那一步（action = "reveal"）单独走三段：先变弱（0.10）→ 画布播揭示动画
+    // → 再变强（style.scrim）。动画编排在 GraphScreen：进这一步先等 dimDownMs
+    // 落定，再播 TUTORIAL_REVEAL_MS 的曲线，再等 600ms 收工；所以这里把
+    // "播完"换算成 dimDownMs + 揭示时长 + 余量，到点再抬回正常浓度。
+    val isRevealStep = spec.action == "reveal"
+    var revealDimRestored by remember(spec) { mutableStateOf(false) }
+    LaunchedEffect(spec) {
+        revealDimRestored = false
+        if (isRevealStep) {
+            delay(Tutorial.dimDownMs.toLong() + TUTORIAL_REVEAL_MS + 120L)
+            revealDimRestored = true
+        }
+    }
+    // ⚠️ `dim` 故意保持成 State、不在组合里读：读了就是每帧一次整块浮层重组。
+    // 它的值只在下面 Canvas 的 draw lambda 里取（项目铁律：动画值只在 lambda 里读）。
+    val dim = animateFloatAsState(
+        targetValue = when {
+            isRevealStep -> if (revealDimRestored) style.scrim else 0.10f
+            Tutorial.spotlight -> 0.5f
+            else -> style.scrim
+        },
         animationSpec = tween(durationMillis = Tutorial.dimDownMs, easing = FastOutSlowInEasing),
         label = "tutorialDim"
     )
@@ -819,23 +866,23 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
 
     Box(Modifier.fillMaxSize()) {
         // ---- 1. 压暗幕（不接触摸）：整屏黑 - 高亮圈那个洞 ----
-        if (dim > 0.001f) {
-            Canvas(Modifier.fillMaxSize()) {
-                val mask = Path().apply {
-                    // EvenOdd：外框 + 内部圆角矩形 = 中间被挖掉
-                    fillType = PathFillType.EvenOdd
-                    addRect(Rect(0f, 0f, size.width, size.height))
-                    if (hole != null && hole.width > 1f && hole.height > 1f) {
-                        addRoundRect(
-                            RoundRect(
-                                rect = hole,
-                                cornerRadius = CornerRadius(hole.height * 0.5f)
-                            )
+        Canvas(Modifier.fillMaxSize()) {
+            val alpha = dim.value
+            if (alpha <= 0.001f) return@Canvas
+            val mask = Path().apply {
+                // EvenOdd：外框 + 内部圆角矩形 = 中间被挖掉
+                fillType = PathFillType.EvenOdd
+                addRect(Rect(0f, 0f, size.width, size.height))
+                if (hole != null && hole.width > 1f && hole.height > 1f) {
+                    addRoundRect(
+                        RoundRect(
+                            rect = hole,
+                            cornerRadius = CornerRadius(hole.height * 0.5f)
                         )
-                    }
+                    )
                 }
-                drawPath(mask, Color.Black.copy(alpha = dim))
             }
+            drawPath(mask, Color.Black.copy(alpha = alpha))
         }
 
         // ---- 2. 挡板：圈外四块（圈内一个节点都不铺）----
@@ -927,6 +974,14 @@ private fun pillHeight(metrics: WatchMetrics) = with(LocalDensity.current) {
 
 /** 洞从上一个位置滑到下一个位置的时长（ms）。和暗幕升降（460）同量级，不抢戏。 */
 private const val TUTORIAL_HOLE_MS = 320
+
+/**
+ * 画布上"曲线被画出来"的时长（ms）。
+ *
+ * 必须和 `GraphScreen` 里那个私有的 `REVEAL_MS` 同值 —— 绘制那一步的暗幕要等
+ * 动画播完才恢复变强。两边各有一份，改一个记得改另一个。
+ */
+private const val TUTORIAL_REVEAL_MS = 520
 
 /**
  * 蒙版上那个洞的**当前位置**：四条边各自补间（见 [TutorialOverlay] 里那段说明）。
@@ -1530,13 +1585,49 @@ private object TutorialArrow {
  * 退出教程的确认框。
  *
  * 用户要求：退出前必须确认一次，并且告诉用户**之后怎么再找到它**。
- * 遮罩层用 `clickable` 吃掉点击（**不用** `Initial` 阶段 consume：
- * 那样会把里面两颗胶囊按钮的点击也一起吃掉，按钮就点不动了）。
+ * 卡片本体走 [TutorialConfirmCard]（和「重温新手教程」入口共用一套）。
  */
 @Composable
 private fun TutorialExitConfirm(
     metrics: WatchMetrics,
     style: TutorialStyle,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    TutorialConfirmCard(
+        metrics = metrics,
+        style = style,
+        title = "退出教程？",
+        body = "退出后想再看 可以长按设置键往下滑 找到「重温新手教程」。",
+        confirmText = "退出",
+        // 用户明确要求：取消 / 退出两颗按钮的高度是原来的两倍。
+        pillHeightScale = 2f,
+        onCancel = onCancel,
+        onConfirm = onConfirm
+    )
+}
+
+/**
+ * 通用确认卡：整屏压暗 + 卡片 + 两颗胶囊按钮。
+ *
+ * 「退出教程」和「重温新手教程」开始前都要先问一句 —— 两处共用这一张卡
+ * （材质跟着教程外观走），不再各写一套。
+ *
+ * 遮罩层用 `clickable` 吃掉点击（**不用** `Initial` 阶段 consume：
+ * 那样会把里面两颗胶囊按钮的点击也一起吃掉，按钮就点不动了）。
+ *
+ * @param pillHeightScale 胶囊高度倍数；退出确认要 ×2，其它入口保持默认 1。
+ */
+@Composable
+internal fun TutorialConfirmCard(
+    metrics: WatchMetrics,
+    style: TutorialStyle,
+    title: String,
+    body: String,
+    confirmText: String,
+    confirmBackground: Color = KeyPalette.danger,
+    cancelText: String = "取消",
+    pillHeightScale: Float = 1f,
     onCancel: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -1564,7 +1655,7 @@ private fun TutorialExitConfirm(
         ) {
             Column(modifier = Modifier.padding(metrics.sizeDp * 0.04f)) {
                 Text(
-                    text = "退出教程？",
+                    text = title,
                     fontSize = metrics.fontSmall,
                     fontWeight = FontWeight.Bold,
                     color = KeyPalette.text,
@@ -1572,19 +1663,21 @@ private fun TutorialExitConfirm(
                 )
                 Spacer(Modifier.height(metrics.sizeDp * 0.02f))
                 Text(
-                    text = "退出后想再看 可以长按设置键往下滑 找到「重温新手教程」。",
+                    text = body,
                     fontSize = metrics.fontTiny,
                     lineHeight = metrics.fontTiny * 1.4f,
                     color = KeyPalette.textMuted
                 )
                 Spacer(Modifier.height(metrics.sizeDp * 0.032f))
+                val pillH = pillHeight(metrics) * pillHeightScale
                 Row {
                     Box(Modifier.weight(1f)) {
                         TutorialPill(
-                            text = "取消",
+                            text = cancelText,
                             metrics = metrics,
                             background = KeyPalette.normalBright,
                             width = null,
+                            height = pillH,
                             fillWidth = true,
                             glass = style.glass,
                             onClick = onCancel
@@ -1593,10 +1686,11 @@ private fun TutorialExitConfirm(
                     Spacer(Modifier.width(metrics.sizeDp * 0.022f))
                     Box(Modifier.weight(1f)) {
                         TutorialPill(
-                            text = "退出",
+                            text = confirmText,
                             metrics = metrics,
-                            background = KeyPalette.danger,
+                            background = confirmBackground,
                             width = null,
+                            height = pillH,
                             fillWidth = true,
                             glass = style.glass,
                             onClick = onConfirm

@@ -1000,8 +1000,13 @@ fun FunctionListScreen(
              */
             val undoMenu = rememberToolbarUndoMenu(
                 metrics = metrics,
-                // 教程信号：菜单一展开就算"用户找到了撤销入口"（第 15 步）
-                onOpenChanged = { open -> if (open) Tutorial.report("undo_menu") },
+                // 教程信号：展开 = 用户找到了撤销入口（第 15 步）；
+                // 收起 = 撤销键已经藏回去（第 17 步"隐藏撤销"）。
+                // 收起既可能是用户又从一颗键划到了另一颗，也可能是 4 秒自动收起，
+                // 两者都达成那一步的目的，所以都上报。
+                onOpenChanged = { open ->
+                    Tutorial.report(if (open) "undo_menu" else "undo_menu_closed")
+                },
                 // 教程信号：撤销箭头按下（第 16 步）
                 onUndo = { Tutorial.report("undo_done") }
             )
@@ -1042,7 +1047,7 @@ fun FunctionListScreen(
                     // （见上面 `undoMenu` 那段与 `PlotMetrics.toolbarKeyAt`）。
                     // 达成之前**不消费任何事件**，所以两颗键的短按/长按照旧。
                     .then(undoMenu.gesture)
-                    // 新手教程第 15 步：高亮"这一整条"（两颗键之间的横划要在它上面做）
+                    // 新手教程第 15 / 17 步：高亮"这一整条"（两颗键之间的横划要在它上面做）
                     .tutorialAnchor(TutorialAnchors.TOOLBAR)
             ) {
             Row(
@@ -1094,7 +1099,7 @@ fun FunctionListScreen(
                         icon = Icons.Filled.Settings,
                         contentDescription = "设置（按住不放看应用信息）",
                         metrics = metrics,
-                        // 新手教程第 17 / 34 步的锚点（只登记矩形，不参与布局与命中）
+                        // 新手教程第 18 / 35 步的锚点（只登记矩形，不参与布局与命中）
                         modifier = Modifier.tutorialAnchor(TutorialAnchors.GEAR),
                         onClick = { if (!settingsHoldLatch.eaten) onSettings() }
                     )
@@ -1154,7 +1159,7 @@ fun FunctionListScreen(
                         // 短按 = 立刻新建并进编辑器（这条路径**一点延迟都没加**）；
                         // 长按转满过的话这一句直接返回，绝不会再开编辑器。
                         containerColor = KeyPalette.accentDeep,
-                        // 新手教程第 0 / 22 步的锚点（只登记矩形，不参与布局与命中）
+                        // 新手教程第 0 / 23 步的锚点（只登记矩形，不参与布局与命中）
                         modifier = Modifier.tutorialAnchor(TutorialAnchors.ADD),
                         onClick = { if (!addHoldLatch.eaten) onAdd() }
                     )
