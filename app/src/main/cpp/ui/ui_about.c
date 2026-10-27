@@ -60,7 +60,7 @@ lv_obj_t *ui_about_create(lv_obj_t *parent)
 
     lv_obj_t *lic = lv_label_create(root);
     lv_label_set_text(lic, "MIT License");
-    lv_obj_set_style_text_font(lic, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lic, ui_font_small(), 0);
     lv_obj_set_style_text_color(lic, lv_color_hex(FD_C_DIM), 0);
 
     return root;

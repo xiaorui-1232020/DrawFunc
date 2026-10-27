@@ -132,7 +132,7 @@ static void row_swipe_end(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(lv_indev_active(), &p);
     /* 只认左滑，而且要滑过约 1/3 行宽（466 屏上约 120px）。 */
-    if (g_swipe_x0 - p.x < 120) return;
+    if (g_swipe_x0 - p.x < UI_PX(120)) return;
 
     lv_obj_t *row = lv_event_get_current_target(e);
     int id = (int)(intptr_t)lv_obj_get_user_data(row);
@@ -152,27 +152,27 @@ static void build_row(lv_obj_t *list, fd_curve *c)
     lv_obj_set_height(row, UI_PX(58));
     lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(row, 14, 0);
-    lv_obj_set_style_pad_hor(row, 10, 0);
-    lv_obj_set_style_pad_ver(row, 6, 0);
+    lv_obj_set_style_radius(row, UI_PX(14), 0);
+    lv_obj_set_style_pad_hor(row, UI_PX(10), 0);
+    lv_obj_set_style_pad_ver(row, UI_PX(6), 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_user_data(row, (void *)(intptr_t)c->fn.id);
     ui_set_click(row, row_open);
 
     lv_obj_t *dot = lv_obj_create(row);
     lv_obj_remove_style_all(dot);
-    lv_obj_set_size(dot, 10, 10);
+    lv_obj_set_size(dot, UI_PX(10), UI_PX(10));
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(dot, lv_color_hex(model_color(c->fn.color_index)), 0);
     lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, -8);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, -UI_PX(8));
 
     lv_obj_t *name = lv_label_create(row);
     lv_label_set_text(name, c->name);
     lv_obj_set_style_text_font(name, ui_font_body(), 0);
     lv_obj_set_style_text_color(name,
                                 lv_color_hex(c->fn.visible ? FD_C_TEXT : FD_C_DIM), 0);
-    lv_obj_align(name, LV_ALIGN_TOP_LEFT, 18, 2);
+    lv_obj_align(name, LV_ALIGN_TOP_LEFT, UI_PX(18), UI_PX(2));
 
     char summary[FD_SRC_CAP * 2 + 16];
     if (model()->settings.complex_plane) {
@@ -184,13 +184,13 @@ static void build_row(lv_obj_t *list, fd_curve *c)
     lv_label_set_text(expr, summary);
     lv_label_set_long_mode(expr, LV_LABEL_LONG_DOT);
     lv_obj_set_width(expr, UI_PX(190));
-    lv_obj_set_style_text_font(expr, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(expr, ui_font_small(), 0);
     lv_obj_set_style_text_color(expr, lv_color_hex(FD_C_DIM), 0);
-    lv_obj_align(expr, LV_ALIGN_TOP_LEFT, 18, 24);
+    lv_obj_align(expr, LV_ALIGN_TOP_LEFT, UI_PX(18), UI_PX(24));
 
     lv_obj_t *vis = small_button(row, c->fn.visible ? "隐" : "显", row_visible,
                                  (void *)(intptr_t)c->fn.id);
-    lv_obj_align(vis, LV_ALIGN_RIGHT_MID, -66, 0);
+    lv_obj_align(vis, LV_ALIGN_RIGHT_MID, -UI_PX(66), 0);
 
     lv_obj_t *del = small_button(row, "删", row_delete, (void *)(intptr_t)c->fn.id);
     lv_obj_align(del, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -307,11 +307,11 @@ static void build_slider_row(lv_obj_t *list, fd_slider *s, int content_w)
 {
     lv_obj_t *row = lv_obj_create(list);
     lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, content_w, 44);
+    lv_obj_set_size(row, content_w, UI_PX(44));
     lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(row, 12, 0);
-    lv_obj_set_style_pad_hor(row, 8, 0);
+    lv_obj_set_style_radius(row, UI_PX(12), 0);
+    lv_obj_set_style_pad_hor(row, UI_PX(8), 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *name = lv_label_create(row);
@@ -321,35 +321,35 @@ static void build_slider_row(lv_obj_t *list, fd_slider *s, int content_w)
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
     /* 右侧固定：数值 62 + 播放 32 + 删除 30 + 三条缝 */
-    const int right_reserved = 62 + 32 + 30 + 6 + 6 + 6;
-    int slider_w = content_w - 16 - 22 - right_reserved;
-    if (slider_w < 40) slider_w = 40;
+    const int right_reserved = UI_PX(62 + 32 + 30 + 6 + 6 + 6);
+    int slider_w = content_w - UI_PX(16) - UI_PX(22) - right_reserved;
+    if (slider_w < UI_PX(40)) slider_w = UI_PX(40);
 
     lv_obj_t *value = lv_label_create(row);
-    lv_obj_set_width(value, 62);
+    lv_obj_set_width(value, UI_PX(62));
     lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_font(value, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(value, ui_font_small(), 0);
     lv_obj_set_style_text_color(value, lv_color_hex(FD_C_DIM), 0);
-    lv_obj_align(value, LV_ALIGN_RIGHT_MID, -(32 + 30 + 12), 0);
+    lv_obj_align(value, LV_ALIGN_RIGHT_MID, -UI_PX(32 + 30 + 12), 0);
 
     lv_obj_t *sl = lv_slider_create(row);
     lv_obj_set_width(sl, slider_w);
-    lv_obj_set_height(sl, 8);
+    lv_obj_set_height(sl, UI_PX(8));
     lv_slider_set_range(sl, 0, FD_SLIDER_RANGE);
     lv_slider_set_value(sl, value_to_slider(s), LV_ANIM_OFF);
     lv_obj_set_style_bg_color(sl, lv_color_hex(0x2A3542), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sl, lv_color_hex(FD_C_ACCENT), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(sl, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
-    lv_obj_set_style_pad_all(sl, 5, LV_PART_KNOB);
-    lv_obj_align(sl, LV_ALIGN_LEFT_MID, 22, 0);
+    lv_obj_set_style_pad_all(sl, UI_PX(5), LV_PART_KNOB);
+    lv_obj_align(sl, LV_ALIGN_LEFT_MID, UI_PX(22), 0);
 
     lv_obj_t *play = small_button(row, s->playing ? "停" : "播", NULL, NULL);
-    lv_obj_set_size(play, 32, 30);
+    lv_obj_set_size(play, UI_PX(32), UI_PX(30));
     lv_obj_set_style_pad_hor(play, 0, 0);
-    lv_obj_align(play, LV_ALIGN_RIGHT_MID, -36, 0);
+    lv_obj_align(play, LV_ALIGN_RIGHT_MID, -UI_PX(36), 0);
 
     lv_obj_t *del = small_button(row, "删", NULL, NULL);
-    lv_obj_set_size(del, 30, 30);
+    lv_obj_set_size(del, UI_PX(30), UI_PX(30));
     lv_obj_set_style_pad_hor(del, 0, 0);
     lv_obj_set_style_bg_color(del, lv_color_hex(0x3A2024), 0);
     lv_obj_t *dl = lv_obj_get_child(del, 0);
@@ -433,7 +433,7 @@ static void preset_clicked(lv_event_t *e)
 static void build_presets(lv_obj_t *list)
 {
     lv_obj_t *title = ui_label(list, "示例", FD_C_DIM);
-    lv_obj_set_style_pad_top(title, 8, 0);
+    lv_obj_set_style_pad_top(title, UI_PX(8), 0);
 
     lv_obj_t *grid = lv_obj_create(list);
     lv_obj_remove_style_all(grid);
@@ -442,19 +442,21 @@ static void build_presets(lv_obj_t *list)
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_style_pad_column(grid, 6, 0);
-    lv_obj_set_style_pad_row(grid, 6, 0);
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(grid, UI_PX(6), 0);
+    lv_obj_set_style_pad_row(grid, UI_PX(6), 0);
 
-    int content_w = (int)ui_width() - 24;
-    if (content_w < 200) content_w = 200;
-    int btn_w = (content_w - 6) / 2;
+    int content_w = (int)ui_width() - UI_PX(24);
+    if (content_w < UI_PX(200)) content_w = UI_PX(200);
+    int btn_w = (content_w - UI_PX(6)) / 2;
 
     for (size_t i = 0; i < sizeof(k_presets) / sizeof(k_presets[0]); i++) {
         lv_obj_t *b = small_button(grid, k_presets[i].label, preset_clicked,
                                    (void *)&k_presets[i]);
         lv_obj_set_width(b, btn_w);
         lv_obj_set_height(b, UI_PX(32));
-        lv_obj_set_style_pad_hor(b, 4, 0);
+        lv_obj_set_style_pad_hor(b, UI_PX(4), 0);
     }
 }
 
@@ -525,13 +527,13 @@ static void build_geo_row(lv_obj_t *list, const fd_geo *g)
     lv_obj_set_height(row, UI_PX(46));
     lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(row, 12, 0);
-    lv_obj_set_style_pad_hor(row, 10, 0);
+    lv_obj_set_style_radius(row, UI_PX(12), 0);
+    lv_obj_set_style_pad_hor(row, UI_PX(10), 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *dot = lv_obj_create(row);
     lv_obj_remove_style_all(dot);
-    lv_obj_set_size(dot, 9, 9);
+    lv_obj_set_size(dot, UI_PX(9), UI_PX(9));
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(dot, lv_color_hex(model_color(g->color_index)), 0);
     lv_obj_set_style_bg_opa(dot, g->visible ? LV_OPA_COVER : LV_OPA_30, 0);
@@ -542,7 +544,7 @@ static void build_geo_row(lv_obj_t *list, const fd_geo *g)
     lv_obj_set_style_text_font(name, ui_font_body(), 0);
     lv_obj_set_style_text_color(name,
                                 lv_color_hex(g->visible ? FD_C_TEXT : FD_C_DIM), 0);
-    lv_obj_align(name, LV_ALIGN_LEFT_MID, 18, 0);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, UI_PX(18), 0);
 
     char info[40];
     geo_info_text(g, info, sizeof(info));
@@ -550,17 +552,17 @@ static void build_geo_row(lv_obj_t *list, const fd_geo *g)
     lv_label_set_text(desc, info);
     lv_obj_set_style_text_font(desc, ui_font_small(), 0);
     lv_obj_set_style_text_color(desc, lv_color_hex(FD_C_DIM), 0);
-    lv_obj_align(desc, LV_ALIGN_LEFT_MID, 58, 0);
+    lv_obj_align(desc, LV_ALIGN_LEFT_MID, UI_PX(58), 0);
 
     lv_obj_t *vis = small_button(row, g->visible ? "隐" : "显", geo_visible_clicked,
                                  (void *)(intptr_t)g->id);
-    lv_obj_set_size(vis, 48, 30);
+    lv_obj_set_size(vis, UI_PX(48), UI_PX(30));
     lv_obj_set_style_pad_hor(vis, 0, 0);
-    lv_obj_align(vis, LV_ALIGN_RIGHT_MID, -58, 0);
+    lv_obj_align(vis, LV_ALIGN_RIGHT_MID, -UI_PX(58), 0);
 
     lv_obj_t *del = small_button(row, "删", geo_delete_clicked,
                                  (void *)(intptr_t)g->id);
-    lv_obj_set_size(del, 30, 30);
+    lv_obj_set_size(del, UI_PX(30), UI_PX(30));
     lv_obj_set_style_pad_hor(del, 0, 0);
     lv_obj_set_style_bg_color(del, lv_color_hex(0x3A2024), 0);
     lv_obj_t *dl = lv_obj_get_child(del, 0);
@@ -598,7 +600,7 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *add = small_button(head, "新建", add_clicked, NULL);
-    lv_obj_align(add, LV_ALIGN_RIGHT_MID, -72, 0);
+    lv_obj_align(add, LV_ALIGN_RIGHT_MID, -UI_PX(72), 0);
     lv_obj_set_style_bg_color(add, lv_color_hex(0x18323C), 0);
     lv_obj_t *al = lv_obj_get_child(add, 0);
     if (al) lv_obj_set_style_text_color(al, lv_color_hex(FD_C_ACCENT), 0);
@@ -609,14 +611,14 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
     lv_obj_set_flex_grow(list, 1);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(list, 6, 0);
+    lv_obj_set_style_pad_row(list, UI_PX(6), 0);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
 
     if (d->curve_count == 0) {
         lv_obj_t *empty = ui_label(list, "还没有曲线，点「新建」加一条", FD_C_DIM);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty, LV_PCT(100));
-        lv_obj_set_style_pad_top(empty, 30, 0);
+        lv_obj_set_style_pad_top(empty, UI_PX(30), 0);
     }
 
     for (int i = 0; i < d->curve_count; i++) {
@@ -625,7 +627,7 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
 
     if (d->geo_count > 0) {
         lv_obj_t *sep = ui_label(list, "图形", FD_C_DIM);
-        lv_obj_set_style_pad_top(sep, 6, 0);
+        lv_obj_set_style_pad_top(sep, UI_PX(6), 0);
         for (int i = 0; i < d->geo_count; i++) {
             build_geo_row(list, &d->geos[i]);
         }
@@ -633,10 +635,10 @@ lv_obj_t *ui_list_create(lv_obj_t *parent)
 
     if (d->slider_count > 0) {
         lv_obj_t *sep = ui_label(list, "参数", FD_C_DIM);
-        lv_obj_set_style_pad_top(sep, 6, 0);
+        lv_obj_set_style_pad_top(sep, UI_PX(6), 0);
 
-        int content_w = (int)ui_width() - 24;
-        if (content_w < 200) content_w = 200;
+        int content_w = (int)ui_width() - UI_PX(24);
+        if (content_w < UI_PX(200)) content_w = UI_PX(200);
         for (int i = 0; i < d->slider_count; i++) {
             build_slider_row(list, &d->sliders[i], content_w);
         }

@@ -19,16 +19,19 @@ F(x, y) = 0    隐函数（marching squares）
 
 | 产物 | 大小 | 说明 |
 |---|---|---|
-| `app/build/outputs/apk/debug/app-debug.apk` | **8,889,748 B（≈8.5 MiB）** | 含 armeabi-v7a / arm64-v8a / x86_64 三个 ABI |
-| `app/build/outputs/apk/release/app-universal-release*.apk` 或 `app-release*.apk` | **6,888,504 B（≈6.6 MiB）** | R8 + 资源压缩，含三个 ABI；`*` 为 `-unsigned`（无签名材料时） |
-| `app-<abi>-release*.apk`（`-PabiSplits`） | **2,132,891–2,481,046 B（≈2.0–2.4 MiB）** | 单 ABI 包，另产出 universal 包 |
+| `app/build/outputs/apk/debug/app-debug.apk` | **13,927,732 B（≈13.3 MiB）** | 含 armeabi-v7a / arm64-v8a / x86_64 三个 ABI |
+| `app/build/outputs/apk/release/app-universal-release*.apk` 或 `app-release*.apk` | **11,916,313 B（≈11.4 MiB）** | R8 + 资源压缩，含三个 ABI；`*` 为 `-unsigned`（无签名材料时） |
+| `app-<abi>-release*.apk`（`-PabiSplits`） | **3,789,384–4,150,135 B（≈3.6–4.0 MiB）** | 单 ABI 包，另产出 universal 包 |
+
+体积的大头是五档中文字库（约 2.9 MiB `.rodata` × 每个 ABI）。表上只用到
+14/16/20 三档，删掉 `font_cn_24/28.c` 可省下约 5 MB（做法见「六、中文字体」）。
 
 已验证：
 
 - `./gradlew :app:assembleDebug :app:assembleRelease` → **BUILD SUCCESSFUL**；
 - 表达式引擎主机测试 **661 项，0 失败**；
 - 特征点分析主机测试 **40 项，0 失败**（另跑过 ASan/UBSan）；
-- 界面冒烟测试：**7 个屏幕全部渲染成功，导出 17 张 PNG**，几何作图 / 存档往返 / 字母键盘路径均走通；
+- 界面冒烟测试：**7 个屏幕全部渲染成功，导出 23 张 PNG**（基准 466×466），几何作图 / 存档往返 / 字母键盘 / 曲线点选路径均走通；
 - Android 9 x86_64 模拟器（TCG，无 KVM）回归：启动、编辑器、列表/参数播放、设置、存档、几何工具、双指缩放、系统返回键均通过。
 
 **尚未在真表上运行过**：表冠、真实触摸采样率、GPU/内存压力仍需真机确认。
@@ -86,20 +89,20 @@ app/src/main/
 └── cpp/
     ├── CMakeLists.txt              LVGL 静态库 + libfunctiondrawer.so
     ├── lv_conf.h                   LVGL 9.2.2 配置（32 位色、8MB 堆、lodepng、stdio FS）
-    ├── engine/                     ★ 纯 C11 数学引擎，零 Android 依赖（4138 行）
+    ├── engine/                     ★ 纯 C11 数学引擎，零 Android 依赖（4533 行）
     │   ├── expr.c / expr.h         词法 + 递归下降/优先级爬升 + 求值 + 中文报错
     │   ├── mathfns.c/.h            函数表：三角/双曲/Γ/erf/阶乘/取整…
     │   ├── viewport.c/.h           世界↔屏幕映射、缩放焦点保持、网格步长
     │   ├── plot.c/.h               四种采样算法 + 断线 + 屏幕像素折线
     │   ├── cmath.c/.h              复数运算 + 复数表达式解析/求值 + 结果标签
     │   └── fd_features.c/.h        零点/极值/截距分析（有主机测试，见「已知差异」）
-    ├── src/                        应用层与平台层（1583 行）
+    ├── src/                        应用层与平台层（1593 行）
     │   ├── app.c/.h                屏幕尺寸、触摸/表冠/按键入口
     │   ├── model.c/.h              文档模型、撤销栈、文本存档、几何对象序列化
     │   ├── geo.c/.h                几何工具数学（距离/面积/角/反射/单位方向/垂直）
     │   ├── subst.c/.h              x(A)/y(A) 与标量名代入表达式
     │   └── platform_android.c      JNI + ANativeWindow 显示/输入驱动
-    ├── ui/                         LVGL 界面（不含字体 3979 行）
+    ├── ui/                         LVGL 界面（不含字体 4914 行）
     │   ├── ui.c/.h                 屏幕路由、主题色、通用控件、toast
     │   ├── ui_graph.c              绘图屏：网格/曲线/手势/信息卡/工具面板
     │   ├── ui_list.c               函数列表、参数滑动条、播放
@@ -108,8 +111,8 @@ app/src/main/
     │   ├── ui_archive.c            存档列表、载入、删除、导出 PNG
     │   ├── ui_settings.c           网格/坐标轴/刻度/角度/表冠/缩放栏/示例/采样质量
     │   ├── ui_about.c              关于页
-    │   └── font_cn_14/16/20.c      中文字库（各约 2.6/3.0/4.0 MB 源码）
-    ├── tests/                      主机端测试（1628 行）
+    │   └── font_cn_14/16/20/24/28.c 中文字库（源码各约 2.6~6.1 MB，编译后 .rodata 357~898 KiB）
+    ├── tests/                      主机端测试（1757 行）
     │   ├── expr_test.c             + build_expr.sh
     │   ├── fd_features_test.c      + build_fd_features.sh
     │   ├── cmath_test.c            + build_cmath.sh
@@ -149,6 +152,12 @@ sh ./gradlew :app:assembleRelease -PabiSplits
 `sdk.dir=...` 即可。**不要**假设 `~/.gradle` 里有可用的 Gradle 发行版——
 wrapper 会重新下载 130 MB 的 `gradle-8.7-bin.zip`。
 
+沙箱里 JDK 不读 `http_proxy` 环境变量，wrapper 分发包和依赖都会卡在 0 字节。
+要么用 `curl` 把 `gradle-8.7-bin.zip` 直接放进
+`$GRADLE_USER_HOME/wrapper/dists/gradle-8.7-bin/<哈希>/`（再补一个同名 `.ok`），
+要么在 `$GRADLE_USER_HOME/gradle.properties` 里写
+`systemProp.https.proxyHost` / `systemProp.https.proxyPort`。
+
 `-PabiSplits` 的产物（未配置签名时文件名带 `-unsigned`）：
 
 ```text
@@ -168,7 +177,7 @@ app/build/outputs/apk/release/
 - `externalNativeBuild.cmake.version = "3.22.1"`，`ndkVersion = "27.2.12479018"`；
 - `keystore.properties` 存在时，debug 与 release **共用同一套 release 签名**
   （签名一致才能 `adb install -r` 覆盖安装，不会清掉表上已有的函数和设置）；
-- release 打开 R8 + 资源压缩，universal 包约 6.6 MB，单 ABI 包约 2.1–2.4 MB；
+- release 打开 R8 + 资源压缩，universal 包约 11.4 MB，单 ABI 包约 3.6–4.0 MB；
 - `-PabiSplits` 走 `splits { abi { ... } }` 拆包，普通构建不受影响。
 
 ### 签名
@@ -251,6 +260,20 @@ bash app/src/main/cpp/tests/build_ui_host.sh
 - `OUT_DIR=...` 指定中间产物目录；
 - `CC=clang` / `gcc` 换编译器。
 
+界面冒烟还支持 `EXTRA_CFLAGS`，用别的屏幕尺寸再跑一遍可以验证设备适配：
+
+```bash
+EXTRA_CFLAGS="-DFD_W=1080 -DFD_H=1920" OUT_DIR=/tmp/fd_phone \
+  bash app/src/main/cpp/tests/build_ui_host.sh /tmp/phone_shots
+```
+
+手机分辨率下会比基准少一张图（`05_props` 打印 `FAILED (err 83)`）：8 MB 的
+LVGL 堆不够编码 1080×1920 的 PNG（lodepng 报「内存分配失败」，出图用的
+`lv_malloc`），只影响主机端截图，屏幕布局与交互照常验证。
+
+（冒烟测试每次都先清掉输出目录里的 `data/`，否则上一轮写的 `autosave.fd`
+会被开机流程载入，第一张截图就不是干净状态。）
+
 界面冒烟测试做的事：
 
 1. 用 `lv_display_create` 建一块内存显示，flush 时直接写 PNG（lodepng），
@@ -269,29 +292,53 @@ bash app/src/main/cpp/tests/build_ui_host.sh
 
 ## 六、中文字体
 
-LVGL 自带字体没有中文，所以用 `lv_font_conv` 从 Noto Sans CJK SC 生成三档点阵：
+LVGL 自带字体没有中文，所以用 `lv_font_conv` 从 Noto Sans CJK SC 生成五档点阵
+（`font_cn_14 / 16 / 20 / 24 / 28`）：
 
 ```bash
-node node_modules/lv_font_conv/lv_font_conv.js \
-  --font NotoSansCJKsc-Regular.otf \
-  --size 16 --bpp 4 --format lvgl \
-  -r 0x20-0x7F \
-  -r 0x3000-0x303F -r 0xFF00-0xFFEF -r 0x2000-0x206F \
-  -r 0x2190-0x21FF -r 0x2200-0x22FF -r 0x2300-0x23FF \
-  --symbols "<GB2312 一级字库 3755 字>" \
-  -o app/src/main/cpp/ui/font_cn_16.c \
-  --lv-include lvgl.h
+# 一次性准备：3755 个一级汉字 + ASCII + 常用符号，存到 /tmp/symbols.txt
+cd /workspace/.toolchain/fontgen
+npm i lv_font_conv@1.5.3
+
+SYMS=$(cat /tmp/symbols.txt)   # 可直接从已有 font_cn_*.c 头部注释里抄出来
+for SZ in 14 16 20 24 28; do
+  node node_modules/lv_font_conv/lv_font_conv.js \
+    --font /usr/share/fonts/opentype/noto-cjk-otf/NotoSansCJKsc-Regular.otf \
+    --size $SZ --bpp 4 --format lvgl \
+    -r 0x20-0x7F \
+    -r 0x3000-0x303F -r 0xFF00-0xFFEF -r 0x2000-0x206F \
+    -r 0x2190-0x21FF -r 0x2200-0x22FF -r 0x2300-0x23FF \
+    --symbols "$SYMS" \
+    -o app/src/main/cpp/ui/font_cn_$SZ.c \
+    --lv-include lvgl.h
+done
 ```
 
 区间含义：ASCII、全角标点、全角字符、通用标点、箭头、数学运算符、杂项技术符号。
-`--symbols` 直接列出 3755 个一级汉字（生成文件的头部注释里保存了完整参数）。
+`--symbols` 直接列出 3755 个一级汉字；生成文件的头部注释里保存了完整参数，
+所以字形表可以随时从已有文件里取回来：
 
-三档字号：`font_cn_14` / `font_cn_16` / `font_cn_20`，均为 `4bpp`，
-`lv_font_conv` 默认开 **RLE 压缩**，所以 `lv_conf.h` 里必须
+```bash
+sed -n 's/.*--symbols \(.*\) -o .*/\1/p' app/src/main/cpp/ui/font_cn_16.c > /tmp/symbols.txt
+```
+
+均为 `4bpp`，`lv_font_conv` 默认开 **RLE 压缩**，所以 `lv_conf.h` 里必须
 `LV_USE_FONT_COMPRESSED 1`，否则字显示成乱码。
 
 覆盖范围是 **GB2312 一级字库（3755 字）+ ASCII + 常用全角标点/数学符号**。
 二级字库和不常用的生僻字不在里面，界面文案不要用。
+
+编译后每个字库的 `.rodata`（字形数据全在这里，`size -A` 实测）：
+
+| 字号 | 14 | 16 | 20 | 24 | 28 |
+|---|---|---|---|---|---|
+| `.rodata` | 357 KiB | 427 KiB | 583 KiB | 740 KiB | 898 KiB |
+
+五档合计约 **2.9 MiB**（每个 ABI 各一份）。
+
+`ui_font_small / ui_font_body / ui_font_title` 按屏幕短边从这五档里选，
+详见「设备适配」。不想要某一档时删掉对应的 `font_cn_XX.c` 并在
+`ui.h` 里去掉 `LV_FONT_DECLARE` 即可（`ui.c` 的选档表也要跟着改）。
 
 ---
 
@@ -320,8 +367,19 @@ UI_PX(v) = round(v * scale)
 ```
 
 466 圆表上 `scale = 1`，尺寸逐像素不变；方表 / 手机按比例放大按钮、行高、卡片、
-键盘键、工具面板。字号从 14 / 16 / 20 三档里按 scale 选（`ui_font_small/body/title`），
-20px 是现有最大字号，所以 1080p 这类大屏上文字相对偏小、几何元素更宽松。
+键盘键、工具面板。命中半径、左滑删除阈值、点击标记点大小也按同一比例放大。
+
+字号用现有的五档点阵 `font_cn_14 / 16 / 20 / 24 / 28`，按目标像素就近取档：
+
+| scale | 小号 | 正文 | 标题 |
+|---|---|---|---|
+| 1.0（466 圆表） | 14 | 16 | 20 |
+| 1.35 | 16 | 20 | 28 |
+| 1.75 | 20 | 24 | 28 |
+| 2.2（1080p 手机） | 20 | 24 | 28 |
+
+即小/正文/标题分别按 `14/16/20 × scale` 取最近的档，并强制严格递增，
+避免大屏上三者挤到同一档。字库详情见「六、中文字体」。
 
 ### 绘图屏手势
 
@@ -337,8 +395,9 @@ UI_PX(v) = round(v * scale)
 | 缩放栏（可选） | 底部「− / 滑动条 / +」：按键一次 1.5 倍，滑轨只做相对微调，按完回中点 |
 | 系统返回键 | 非绘图屏返回上一屏；绘图屏不消费（交给系统） |
 
-顶部 56px 按钮条、工具提示条（96px）、底部信息卡（高度随特征行变化）不参与绘图手势，
-避免点按钮时把画布拖走；打开缩放栏时底部 52px 也排除在外。
+顶部 `UI_PX(56)` 按钮条、工具提示条（`UI_PX(96)`）、底部信息卡（高度随特征行变化）
+不参与绘图手势，避免点按钮时把画布拖走；打开缩放栏时底部 `UI_PX(52)` 也排除在外
+（按 466×466 基准尺寸写，其它屏幕按 scale 放大）。
 
 ### 几何工具（16 个，5 个分区）
 
@@ -496,7 +555,7 @@ x(B)      B 不是已知点 → 原样保留，由引擎报错
 | 未在真表验证 | 显示驱动、表冠、触摸采样率都只在主机端用内存显示 + 合成事件验证过。 |
 | 隐函数精度 | 靠网格发现零点，比网格还细的特征会漏。设置里提高采样质量可缓解，代价是求值次数上升。 |
 | 中文字库是子集 | 只有 GB2312 一级字库 + ASCII + 常用符号，生僻字显示为空。 |
-| 大屏字号上限 | 字号只有 14 / 16 / 20 三档点阵，几何尺寸按屏幕短边缩放，但文字在 1080p 大屏上相对偏小；要彻底解决需要再生成 24/28px 字库。 |
+| 大屏字号上限 | 最大字号 28px，更大屏（>1300px 短边）上比例会停在这一档，文字相对偏小；要再大得生成 32px 字库。 |
 | 参数方程 t 范围 | 编辑器里是预设区间，不能任意输入，也没有「0~2π / −10~10 / R」那排快捷预设。 |
 | 没有交点求解/导数/积分/表格 | 信息卡只到零点、极值、y 截距（`fd_features.c`），曲线之间的交点与导数/积分没有实现。 |
 

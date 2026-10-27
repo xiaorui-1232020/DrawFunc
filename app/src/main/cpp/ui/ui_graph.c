@@ -330,7 +330,7 @@ static void add_number(lv_obj_t *parent, int x, int y, const char *text)
     if (!parent) return;
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(l, ui_font_small(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(FD_C_DIM), 0);
     lv_obj_set_pos(l, x, y);
 }

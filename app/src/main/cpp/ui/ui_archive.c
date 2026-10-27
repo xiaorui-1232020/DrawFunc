@@ -118,7 +118,7 @@ void ui_archive_open_export_dialog(void)
     lv_obj_set_style_pad_ver(ta, UI_PX(8), 0);
     lv_obj_set_style_border_width(ta, 0, 0);
     lv_obj_set_style_text_color(ta, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(ta, ui_font_body(), 0);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, 48);
     lv_textarea_set_text(ta, g_name);
@@ -242,8 +242,8 @@ lv_obj_t *ui_archive_create(lv_obj_t *parent)
         lv_obj_set_height(row, UI_PX(54));
         lv_obj_set_style_bg_color(row, lv_color_hex(FD_C_PANEL), 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(row, 14, 0);
-        lv_obj_set_style_pad_hor(row, 10, 0);
+        lv_obj_set_style_radius(row, UI_PX(14), 0);
+        lv_obj_set_style_pad_hor(row, UI_PX(10), 0);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *name = lv_label_create(row);
@@ -257,7 +257,7 @@ lv_obj_t *ui_archive_create(lv_obj_t *parent)
         lv_obj_t *load = ui_button(row, "载入", load_clicked);
         lv_obj_set_size(load, UI_PX(58), UI_PX(32));
         lv_obj_set_user_data(load, (void *)(intptr_t)i);
-        lv_obj_align(load, LV_ALIGN_RIGHT_MID, -62, 0);
+        lv_obj_align(load, LV_ALIGN_RIGHT_MID, -UI_PX(62), 0);
 
         lv_obj_t *del = ui_button(row, "删", delete_clicked);
         lv_obj_set_size(del, UI_PX(44), UI_PX(32));

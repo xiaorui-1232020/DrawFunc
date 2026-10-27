@@ -6,6 +6,7 @@
 # 用法：bash app/src/main/cpp/tests/build_ui_host.sh [输出目录]
 # 可选环境变量：
 #   CC        编译器（默认 cc）
+#   EXTRA_CFLAGS  追加的编译参数，例如 -DFD_W=1080 -DFD_H=1920 验证大屏
 #   SANITIZE  设为 1 时开启 ASan/UBSan（强烈建议跑一遍）
 #   OUT_DIR   可执行文件和中间产物目录（默认 /tmp/fd_ui_build）
 
@@ -25,11 +26,17 @@ INC=(-I "${CPP_DIR}" -I "${LVGL_DIR}" -I "${CPP_DIR}/engine" \
      -I "${CPP_DIR}/src" -I "${CPP_DIR}/ui" -I "${CPP_DIR}/tests")
 
 CFLAGS=(-std=gnu11 -O2 -DLV_CONF_INCLUDE_SIMPLE)
+if [ -n "${EXTRA_CFLAGS:-}" ]; then
+    # shellcheck disable=SC2206
+    CFLAGS+=(${EXTRA_CFLAGS})
+fi
 if [ "${SANITIZE:-0}" = "1" ]; then
     CFLAGS+=(-g -fsanitize=address,undefined -fno-omit-frame-pointer)
 fi
 
 mkdir -p "${OBJ}" "${SHOT_DIR}"
+# 每次从干净状态开始：残留的 autosave.fd 会被 app_init 载入，污染第一张截图。
+rm -rf "${SHOT_DIR}/data"
 
 shopt -s globstar nullglob
 LV_SOURCES=("${LVGL_DIR}/src/"**/*.c)

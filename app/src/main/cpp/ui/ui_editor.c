@@ -468,7 +468,7 @@ static lv_obj_t *make_ta(lv_obj_t *parent, const char *text, const char *hint)
     lv_obj_set_style_pad_ver(ta, UI_PX(8), 0);
     lv_obj_set_style_border_width(ta, 0, 0);
     lv_obj_set_style_text_color(ta, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(ta, ui_font_title(), 0);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, 240);
     lv_textarea_set_placeholder_text(ta, hint);
@@ -519,18 +519,18 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *done = ui_button(head, "完成", done_clicked);
-    lv_obj_set_size(done, 62, 34);
+    lv_obj_set_size(done, UI_PX(62), UI_PX(34));
     lv_obj_align(done, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *back = ui_button(head, "返回", back_clicked);
-    lv_obj_set_size(back, 62, 34);
-    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -70, 0);
+    lv_obj_set_size(back, UI_PX(62), UI_PX(34));
+    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -UI_PX(70), 0);
 
     /* 类型选择 */
     static const char *const mode_names[] = {"y=f(x)", "r(θ)", "x(t),y(t)", "F(x,y)"};
     lv_obj_t *modes = lv_obj_create(root);
     lv_obj_remove_style_all(modes);
-    lv_obj_set_size(modes, LV_PCT(100), 34);
+    lv_obj_set_size(modes, LV_PCT(100), UI_PX(34));
     lv_obj_remove_flag(modes, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(modes, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(modes, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
@@ -542,7 +542,7 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
         bool on = ((int)c->fn.mode == m);
         lv_obj_set_style_bg_color(b, lv_color_hex(on ? 0x1B3B48 : FD_C_PANEL2), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 10, 0);
+        lv_obj_set_style_radius(b, UI_PX(10), 0);
         lv_obj_set_style_border_width(b, 0, 0);
         lv_obj_set_user_data(b, (void *)(intptr_t)m);
         lv_obj_add_event_cb(b, mode_clicked, LV_EVENT_CLICKED, NULL);
@@ -568,7 +568,7 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
         lv_obj_t *row = lv_obj_create(root);
         g_ta2_row = row;
         lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, LV_PCT(100), 40);
+        lv_obj_set_size(row, LV_PCT(100), UI_PX(40));
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
@@ -576,11 +576,11 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
 
         lv_obj_t *tag = lv_label_create(row);
         lv_label_set_text(tag, "y(t)=");
-        lv_obj_set_style_text_font(tag, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(tag, ui_font_body(), 0);
         lv_obj_set_style_text_color(tag, lv_color_hex(FD_C_DIM), 0);
 
         g_ta2 = make_ta(row, c->fn.src2, "例如 sin(t)");
-        lv_obj_set_width(g_ta2, 320);
+        lv_obj_set_width(g_ta2, UI_PX(320));
     }
 
     g_err = lv_label_create(root);
@@ -595,7 +595,7 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     lv_obj_t *tabs = lv_obj_create(root);
     g_tabs = tabs;
     lv_obj_remove_style_all(tabs);
-    lv_obj_set_size(tabs, LV_PCT(100), 32);
+    lv_obj_set_size(tabs, LV_PCT(100), UI_PX(32));
     lv_obj_remove_flag(tabs, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(tabs, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(tabs, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
@@ -607,7 +607,7 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
         bool on = (i == 0);
         lv_obj_set_style_bg_color(b, lv_color_hex(on ? 0x1B3B48 : FD_C_PANEL2), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 9, 0);
+        lv_obj_set_style_radius(b, UI_PX(9), 0);
         lv_obj_set_style_border_width(b, 0, 0);
         lv_obj_set_user_data(b, (void *)(intptr_t)i);
         lv_obj_add_event_cb(b, tab_clicked, LV_EVENT_CLICKED, NULL);

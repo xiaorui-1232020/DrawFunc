@@ -19,8 +19,13 @@
 #include "src/libs/lodepng/lodepng.h"
 #include "ui.h"
 
+/* 屏幕尺寸：默认按 466×466 圆表，可用 -DFD_W= / -DFD_H= 覆盖来验证其它设备。 */
+#ifndef FD_W
 #define FD_W 466
+#endif
+#ifndef FD_H
 #define FD_H 466
+#endif
 
 static uint8_t *g_out;   /* 最终画面（ARGB8888，内存序 B,G,R,A） */
 static uint8_t *g_draw;  /* LVGL 的绘制缓冲 */

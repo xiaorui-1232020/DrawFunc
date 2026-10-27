@@ -40,21 +40,53 @@ lv_coord_t ui_px(int v)
     return (lv_coord_t)((float)v * s + 0.5f);
 }
 
+/* 现有字库的 5 个字号，按屏幕短边选档。 */
+static const lv_font_t *const k_fonts[5] = {
+        &font_cn_14, &font_cn_16, &font_cn_20, &font_cn_24, &font_cn_28,
+};
+static const int k_font_sizes[5] = {14, 16, 20, 24, 28};
+
+/** 离目标像素最近的一档字号下标。 */
+static int nearest_font_idx(float want)
+{
+    int best = 0;
+    float best_d = 1e9f;
+    for (int i = 0; i < 5; i++) {
+        float d = (float)k_font_sizes[i] - want;
+        if (d < 0) d = -d;
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
 const lv_font_t *ui_font_small(void)
 {
-    return ui_scale() >= 1.35f ? &font_cn_16 : &font_cn_14;
+    /* 小/正文/标题按 14/16/20 起步，随 scale 一起变大，并保持严格递增。 */
+    int t = nearest_font_idx(20.0f * ui_scale());
+    int b = nearest_font_idx(16.0f * ui_scale());
+    int s = nearest_font_idx(14.0f * ui_scale());
+    if (b > t - 1) b = t - 1;
+    if (s > b - 1) s = b - 1;
+    if (b < 1) b = 1;
+    if (s < 0) s = 0;
+    return k_fonts[s];
 }
 
 const lv_font_t *ui_font_body(void)
 {
-    if (ui_scale() >= 1.35f) return &font_cn_20;
-    if (ui_scale() >= 0.95f) return &font_cn_16;
-    return &font_cn_14;
+    int t = nearest_font_idx(20.0f * ui_scale());
+    int b = nearest_font_idx(16.0f * ui_scale());
+    if (b > t - 1) b = t - 1;
+    if (b < 1) b = 1;
+    return k_fonts[b];
 }
 
 const lv_font_t *ui_font_title(void)
 {
-    return &font_cn_20;
+    return k_fonts[nearest_font_idx(20.0f * ui_scale())];
 }
 
 static lv_obj_t *build_screen(ui_screen s, lv_obj_t *parent)

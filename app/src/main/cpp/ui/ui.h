@@ -13,6 +13,8 @@ extern "C" {
 LV_FONT_DECLARE(font_cn_14);
 LV_FONT_DECLARE(font_cn_16);
 LV_FONT_DECLARE(font_cn_20);
+LV_FONT_DECLARE(font_cn_24);
+LV_FONT_DECLARE(font_cn_28);
 
 /* ---- 主题 ---- */
 #define FD_C_BG 0x0B0F14
