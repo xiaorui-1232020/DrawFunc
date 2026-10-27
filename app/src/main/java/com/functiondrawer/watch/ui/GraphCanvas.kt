@@ -138,6 +138,15 @@ fun GraphCanvas(
      */
     objects: List<GraphObject> = emptyList(),
     /**
+     * 正在被手指拖动的点对象 id（用户需求 13："拖动点的效果没有实装"）。
+     *
+     * 拖动本身在 [com.functiondrawer.watch.ui.GraphState.movePointDrag] 里已经写得好了，
+     * 缺的是"看得出它在被拖"的反馈：这里给那个点画一圈强调色的光环 + 一道呼吸描边，
+     * 手指底下就有一个明确的抓取感（否则拖动时只看到点跟着走，分不清是点被拖还是
+     * 整个图像被平移了）。
+     */
+    draggingPointId: Long? = null,
+    /**
      * 要额外加光晕的**世界坐标点**（#7：交点/极值点也要加阴影）。
      *
      * 和 [shadowIds] 的分工：那个按 id 给整条曲线加光晕，这个给"零散的点"加 ——
@@ -436,7 +445,8 @@ fun GraphCanvas(
             // 度量图形的出现/消失进度（见 measureAnim）。传进去而不是在外面算好：
             // 三个 map 都是 Compose 状态，**在绘制阶段读**才能只让画布重画、
             // 不每帧重组整个 GraphCanvas（和上面曲线的 reveal.value 同一个理由）。
-            measureAnim = measureAnim
+            measureAnim = measureAnim,
+            draggingPointId = draggingPointId
         )
 
         // ---- 交点/极值点的高亮光晕（#7 后半）----
@@ -607,7 +617,9 @@ private fun DrawScope.drawObjects(
      * ⚠️ 在**绘制阶段**读它（三个 map 都是 Compose 状态）：动画每帧只让画布重画，
      * 不会每一帧重组整个 `GraphCanvas` —— 和曲线的 `reveal.value` 同一个理由。
      */
-    measureAnim: MeasureAnimations? = null
+    measureAnim: MeasureAnimations? = null,
+    /** 正在被手指拖动的点 id（用户需求 13），画一圈"抓住了"的强调光环。 */
+    draggingPointId: Long? = null
 ) {
     val pointR = size.minDimension * OBJECT_POINT_R
     val haloR = size.minDimension * OBJECT_HALO_R
@@ -670,6 +682,17 @@ private fun DrawScope.drawObjects(
         val cx = vp.toScreenX(o.point.x)
         val cy = vp.toScreenY(o.point.y)
         val color = CurvePalette[o.colorIndex.mod(CurvePalette.size)]
+        if (o.id == draggingPointId) {
+            // 拖动中：先垫一圈强调色光环 + 一道描边，手指底下就是"抓住了"的样子
+            val grab = CurvePalette[0]
+            drawCircle(grab.copy(alpha = 0.20f), radius = pointR * 2.6f, center = Offset(cx, cy))
+            drawCircle(
+                color = grab.copy(alpha = 0.80f),
+                radius = pointR * 1.7f,
+                center = Offset(cx, cy),
+                style = Stroke(width = stroke)
+            )
+        }
         if (shadowIds.contains(o.id)) {
             drawCircle(color.copy(alpha = SHADOW_ALPHA), radius = haloR, center = Offset(cx, cy))
         }

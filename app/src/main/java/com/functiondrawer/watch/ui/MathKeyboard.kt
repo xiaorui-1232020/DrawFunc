@@ -980,23 +980,26 @@ private fun KeyButton(
         shape = shape,
         modifier = modifier
             .fillMaxWidth()
+            // 2026-10-27：用户原话"函数创建界面的键盘没有毛玻璃主题"。
+            // 键盘键和其它按键一样叠玻璃光泽（亮边 + 顶部高光 + 底沿回光），
+            // Material 主题不加这一层。
+            .then(if (LocalGlassTheme.current) Modifier.glassSurface(shape) else Modifier)
             .then(tap)
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // ---- n 次根号键：**图标用虚线框** ----
+            // ---- n 次根号键：**图标画成 GeoGebra 那样** ----
             //
-            // 用户原话："我是说图标用虚线框，实际运算用阴影框"、"n 次根号的图标也和
-            // GeoGebra 一样，GeoGebra 是做成根号指数的位置用虚线圈着"。
-            // 所以这颗键不再用字符 `ⁿ√` 拼，而是直接用排版引擎画 `root(x,)`：
-            // 根号指数那一格是空的，正好落在左上角的虚线框里（见 MathRender 的
-            // [SlotStyle.DASHED]），被开方数画个 `x` —— 和 GeoGebra 那颗键一个样子。
-            // 只有这一颗键需要特殊字形，别的键仍是纯文字。
+            // 用户原话："n 次根号的图标没有做成和 GeoGebra 一样。"
+            // GeoGebra 那颗键的图标是「左上角一个小的 n + 根号 + 被开方数 x」，
+            // 不是一块空的虚线框。所以这里直接让排版引擎画 `root(x,n)`：
+            // 指数位置的 `n` 用 script 字号（和 GeoGebra 的根指数同比例），
+            // 被开方数是 `x`。只有这一颗键需要特殊字形，别的键仍是纯文字。
             if (key.action is KeyAction.Insert && key.action.text == "root(,)") {
                 val context = LocalContext.current
                 val fonts = remember(context) { MathFontCache.get(context) }
                 val px = with(LocalDensity.current) { metrics.fontSmall.toPx() } * fontScale
                 val icon = remember(px, fonts) {
-                    layoutMath("root(x,)", px, Float.MAX_VALUE, fonts, SlotStyle.DASHED)
+                    layoutMath("root(x,n)", px, Float.MAX_VALUE, fonts)
                 }
                 Canvas(Modifier.fillMaxSize()) {
                     val iconX = (size.width - icon.width) / 2f

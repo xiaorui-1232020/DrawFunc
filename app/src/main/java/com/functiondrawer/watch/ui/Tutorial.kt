@@ -43,8 +43,11 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -782,6 +785,8 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
     val screenH = with(density) { geometry.screenH.toPx() }
     val anchor = TutorialAnchors.get(Tutorial.currentAnchor)
     var exitConfirm by remember { mutableStateOf(false) }
+    // 本轮：教程的四套外观（Material / 毛玻璃 × 白天 / 夜间），见 [rememberTutorialStyle]
+    val style = rememberTutorialStyle()
 
     // 压暗幕：两个方向同长（见 Tutorial.dimDownMs）
     //
@@ -790,7 +795,7 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
     // 其余步骤是 0 —— 于是教程期间背景和平时一样亮，看起来"没有蒙版"。
     // 现在**每一步都压一层**：普通步骤 0.30、自动编排步骤 0.5。
     val dim by animateFloatAsState(
-        targetValue = if (Tutorial.spotlight) 0.5f else 0.30f,
+        targetValue = if (Tutorial.spotlight) 0.5f else style.scrim,
         animationSpec = tween(durationMillis = Tutorial.dimDownMs, easing = FastOutSlowInEasing),
         label = "tutorialDim"
     )
@@ -801,10 +806,36 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
         Rect(it.left - pad, it.top - pad, it.right + pad, it.bottom + pad)
     }
 
+    // ---- 本轮的「阴影（蒙版）形状也要动」----
+    //
+    // 用户原话（两条）：
+    //   1. "新手教程里提示圈的位置没有去除阴影" —— 蒙版是一整块均匀的黑，
+    //      高亮的那个控件也被自己盖住，看着就是"它底下压着一层影"；
+    //   2. "新手教程的阴影改变动画没做" —— 换一步时蒙版是**啪**一下换新的。
+    //
+    // 现在蒙版改成"挖了一个洞"的暗幕：洞里完全不压暗（所以高亮控件是干净的），
+    // 洞的位置/大小随着锚点变化**用四条边各自补间**滑过去（见下面 [animatedHole]）。
+    val hole = animatedHole(ring)
+
     Box(Modifier.fillMaxSize()) {
-        // ---- 1. 压暗幕（不接触摸）----
+        // ---- 1. 压暗幕（不接触摸）：整屏黑 - 高亮圈那个洞 ----
         if (dim > 0.001f) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
+            Canvas(Modifier.fillMaxSize()) {
+                val mask = Path().apply {
+                    // EvenOdd：外框 + 内部圆角矩形 = 中间被挖掉
+                    fillType = PathFillType.EvenOdd
+                    addRect(Rect(0f, 0f, size.width, size.height))
+                    if (hole != null && hole.width > 1f && hole.height > 1f) {
+                        addRoundRect(
+                            RoundRect(
+                                rect = hole,
+                                cornerRadius = CornerRadius(hole.height * 0.5f)
+                            )
+                        )
+                    }
+                }
+                drawPath(mask, Color.Black.copy(alpha = dim))
+            }
         }
 
         // ---- 2. 挡板：圈外四块（圈内一个节点都不铺）----
@@ -820,11 +851,11 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
         }
 
         // ---- 3. 高亮圈 + 手势提示（都不接触摸）----
-        if (ring != null) HighlightRing(ring, metrics)
+        if (ring != null) HighlightRing(ring, metrics, style)
         if (spec.gesture != TutorialGesture.NONE) {
             val hintSize = metrics.sizePx * 0.17f
             val center = hintCenter(spec.gesture, ring, cardSpot, screenW, screenH, hintSize)
-            GestureHint(spec.gesture, center, hintSize)
+            GestureHint(spec.gesture, center, hintSize, style)
         }
 
         // ---- 4. 卡片 ----
@@ -835,6 +866,7 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
             screenW = screenW,
             screenH = screenH,
             metrics = metrics,
+            style = style,
             onBack = { Tutorial.back() },
             onExit = { exitConfirm = true },
             onFinish = { Tutorial.finish() }
@@ -844,6 +876,7 @@ internal fun TutorialOverlay(metrics: WatchMetrics, geometry: ScreenGeometry) {
         if (exitConfirm) {
             TutorialExitConfirm(
                 metrics = metrics,
+                style = style,
                 onCancel = { exitConfirm = false },
                 onConfirm = {
                     exitConfirm = false
@@ -888,12 +921,121 @@ private fun pillHeight(metrics: WatchMetrics) = with(LocalDensity.current) {
     metrics.fontSmall.toDp() * 1.18f
 }
 
-/** 高亮圈：圆角矩形描边 + 呼吸柔光。 */
+// ---------------------------------------------------------------------------
+// 蒙版的"洞"（本轮新增）
+// ---------------------------------------------------------------------------
+
+/** 洞从上一个位置滑到下一个位置的时长（ms）。和暗幕升降（460）同量级，不抢戏。 */
+private const val TUTORIAL_HOLE_MS = 320
+
+/**
+ * 蒙版上那个洞的**当前位置**：四条边各自补间（见 [TutorialOverlay] 里那段说明）。
+ *
+ * 为什么用四条独立的 `animateFloatAsState` 而不是一条 Rect 动画：
+ * `Animatable<Rect>` 需要 `Rect.VectorConverter`，而这里只需要"位置/大小跟着变"
+ * —— 四条边各自 tween 已经足够，而且宽度/高度变化时曲率（= 半高）会自然重算。
+ *
+ * 返回 null = 这一步没有锚点（洞收到 0 面积，蒙版就是一整块）。
+ */
 @Composable
-private fun HighlightRing(rect: Rect, metrics: WatchMetrics) {
+private fun animatedHole(target: Rect?): Rect? {
+    val spec = tween<Float>(durationMillis = TUTORIAL_HOLE_MS, easing = FastOutSlowInEasing)
+    val l by animateFloatAsState(target?.left ?: 0f, spec, label = "tutorialHoleL")
+    val t by animateFloatAsState(target?.top ?: 0f, spec, label = "tutorialHoleT")
+    val r by animateFloatAsState(target?.right ?: 0f, spec, label = "tutorialHoleR")
+    val b by animateFloatAsState(target?.bottom ?: 0f, spec, label = "tutorialHoleB")
+    if (r - l <= 2f || b - t <= 2f) return null
+    return Rect(l, t, r, b)
+}
+
+// ---------------------------------------------------------------------------
+// 教程的四套外观（本轮新增）
+//
+// 用户原话："请为 material 主题和毛玻璃主题的白天模式和夜间模式各写一套
+// 欢迎界面和新手教程的样式。"
+//
+// 于是教程浮层的"材质"集中到这一处：卡片/描边/强调色/蒙版浓度四件事，
+// 按 (毛玻璃?, 白天?) 四种组合各给一套值；控件怎么画（是否叠玻璃、是否描边）
+// 由 [glass] 这一位决定。Material 四套都不叠玻璃、蒙版更浓一点。
+// ---------------------------------------------------------------------------
+
+/** 教程浮层的一套外观。 */
+internal class TutorialStyle(
+    /** 是否走液态玻璃语言（卡片/胶囊叠 `glassSurface`）。 */
+    val glass: Boolean,
+    /** 白天模式（浅底）。 */
+    val day: Boolean,
+    /** 卡片底色。 */
+    val card: Color,
+    /** 卡片描边。 */
+    val cardBorder: Color,
+    /** 强调色（高亮圈、手势提示、进度条）。 */
+    val accent: Color,
+    /** 普通步骤的蒙版浓度。 */
+    val scrim: Float
+)
+
+/**
+ * 当前该用哪一套。
+ *
+ * 四种组合的差别（都写在选择表里，不再散落到各控件）：
+ *   * **Material 夜间**：实心深卡片 + 白 20% 描边，蒙版 0.34（对比最强）；
+ *   * **Material 白天**：实心浅卡片 + 深 12% 描边，蒙版 0.24；
+ *   * **毛玻璃 夜间**：半透明卡（[GlassTokens.surface]）+ 玻璃光泽，蒙版 0.28
+ *     （玻璃本身已经压了一层暗，再压浓就看不清下面的曲线）；
+ *   * **毛玻璃 白天**：半透明白卡 + 玻璃光泽，蒙版 0.20（浅底上太浓会显脏）。
+ */
+@Composable
+internal fun rememberTutorialStyle(): TutorialStyle {
+    val glass = LocalGlassTheme.current
+    val day = GlassTokens.isLight
+    return remember(glass, day) {
+        when {
+            glass && day -> TutorialStyle(
+                glass = true, day = true,
+                card = GlassTokens.surface,
+                cardBorder = Color.White.copy(alpha = 0.72f),
+                accent = KeyPalette.accent,
+                scrim = 0.20f
+            )
+            glass -> TutorialStyle(
+                glass = true, day = false,
+                card = GlassTokens.surface,
+                cardBorder = Color.White.copy(alpha = 0.34f),
+                accent = KeyPalette.accent,
+                scrim = 0.28f
+            )
+            day -> TutorialStyle(
+                glass = false, day = true,
+                card = KeyPalette.bubble,
+                cardBorder = Color.Black.copy(alpha = 0.12f),
+                accent = KeyPalette.accent,
+                scrim = 0.24f
+            )
+            else -> TutorialStyle(
+                glass = false, day = false,
+                card = KeyPalette.bubble,
+                cardBorder = Color.White.copy(alpha = 0.20f),
+                accent = KeyPalette.accent,
+                scrim = 0.34f
+            )
+        }
+    }
+}
+
+/**
+ * 高亮圈：一圈细描边 + 极淡的呼吸（**没有影**）。
+ *
+ * 2026-10-27（本轮）：用户说"教程里提示圈的位置没有去除阴影"。
+ * 旧写法在正圈**外面**又套了一圈 `stroke × 3.2`、alpha 0.12~0.34 的宽描边 ——
+ * 那一圈糊边就是用户看到的"阴影"。现在整圈宽度只比正圈宽 1px，
+ * 强弱只靠 alpha 呼吸（0.18 → 0.45），不再有任何"放大的一圈"。
+ */
+@Composable
+private fun HighlightRing(rect: Rect, metrics: WatchMetrics, style: TutorialStyle) {
     val pulse by rememberInfiniteTransition(label = "tutorialRing").animateFloat(
-        initialValue = 0.25f,
-        targetValue = 1f,
+        initialValue = 0.18f,
+        targetValue = 0.45f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -912,13 +1054,14 @@ private fun HighlightRing(rect: Rect, metrics: WatchMetrics) {
             .drawBehind {
                 // 胶囊圆角：高的一半（键盘键 / 图标键 / 行都是胶囊）
                 val corner = CornerRadius(size.height * 0.5f)
+                // 呼吸的那一圈 = 正圈自己加宽 1px（不是外面再套一圈）
                 drawRoundRect(
-                    color = KeyPalette.accent.copy(alpha = 0.12f + 0.22f * pulse),
-                    style = Stroke(width = stroke * 3.2f),
+                    color = style.accent.copy(alpha = pulse * 0.5f),
+                    style = Stroke(width = stroke + 1f),
                     cornerRadius = corner
                 )
                 drawRoundRect(
-                    color = KeyPalette.accent,
+                    color = style.accent,
                     style = Stroke(width = stroke),
                     cornerRadius = corner
                 )
@@ -935,6 +1078,15 @@ private fun hintCenter(
     screenH: Float,
     sizePx: Float
 ): Offset {
+    // ---- 本轮（用户原话："提示圈和引导点击的特效不在一个位置，引导点击的特效偏移了"）----
+    //
+    // 点一下 / 长按这两种手势，提示**必须正好画在高亮圈的中心** ——
+    // 用户看到的就是"圈里的那个控件会被点"。旧写法特意把它挪到圈外
+    // （`ring.top - 0.75 × size`），于是两个图形错开一大截。
+    // 只有"滑动"类手势才需要往边缘挪（手指要从那头划到这头，画在圈心没意义）。
+    if (ring != null && (gesture == TutorialGesture.TAP || gesture == TutorialGesture.LONG_PRESS)) {
+        return ring.center
+    }
     // 没有锚点的手势：贴着对应的屏幕边画
     when (gesture) {
         TutorialGesture.SWIPE_UP -> return Offset(screenW / 2f, screenH * 0.88f)
@@ -951,7 +1103,7 @@ private fun hintCenter(
     }
     if (ring == null) return Offset(screenW / 2f, screenH * 0.5f)
 
-    // 有锚点：放到**卡片对面**那一侧，别让卡片压住提示
+    // 有锚点的滑动手势：放到**卡片对面**那一侧，别让卡片压住提示
     val cardAbove = spot == TutorialCardSpot.BOTTOM || spot == TutorialCardSpot.BELOW
     val y = if (cardAbove) ring.top - sizePx * 0.75f else ring.bottom + sizePx * 0.75f
     return Offset(
@@ -985,9 +1137,18 @@ private fun TouchBlocker(xPx: Float, yPx: Float, wPx: Float, hPx: Float) {
     )
 }
 
-/** 手势提示：点 / 长按 / 四个方向的箭头。纯 Canvas，不接触摸。 */
+/**
+ * 手势提示：点 / 长按 / 四个方向的箭头。纯 Canvas，不接触摸。
+ *
+ * [style] 只用到强调色 —— 提示图形的颜色跟着教程那套外观走（见 [rememberTutorialStyle]）。
+ */
 @Composable
-private fun GestureHint(gesture: TutorialGesture, center: Offset, sizePx: Float) {
+private fun GestureHint(
+    gesture: TutorialGesture,
+    center: Offset,
+    sizePx: Float,
+    style: TutorialStyle
+) {
     if (gesture == TutorialGesture.NONE) return
     val density = LocalDensity.current
     val pulse by rememberInfiniteTransition(label = "tutorialHint").animateFloat(
@@ -1007,7 +1168,7 @@ private fun GestureHint(gesture: TutorialGesture, center: Offset, sizePx: Float)
         val s = size.minDimension
         val c = Offset(size.width / 2f, size.height / 2f)
         val stroke = s * 0.06f
-        val color = KeyPalette.accent
+        val color = style.accent
         when (gesture) {
             TutorialGesture.TAP -> {
                 // 外圈往外扩、同时淡出（"点一下"的涟漪）
@@ -1108,6 +1269,7 @@ private fun TutorialCard(
     screenW: Float,
     screenH: Float,
     metrics: WatchMetrics,
+    style: TutorialStyle,
     onBack: () -> Unit,
     onExit: () -> Unit,
     onFinish: () -> Unit
@@ -1138,13 +1300,26 @@ private fun TutorialCard(
     }.coerceIn(0f, (screenH - cardHeight).coerceAtLeast(0f))
 
     val shape = MaterialTheme.shapes.large
+    // 卡片"材质"由教程外观决定（见 [rememberTutorialStyle]）：
+    //   * 毛玻璃 → 半透明底 + `glassSurface` 的亮边/高光/回光（不再额外描边，玻璃自带）；
+    //   * Material → 实心底 + 1dp 细描边。
+    //
+    // 底色写在 `background(color, shape)` 里（自己裁形），**不**在链首加 `clip`
+    // —— 否则玻璃那层"往下散的投影"会被一起裁进卡片轮廓里，等于没有影。
+    val surface = if (style.glass) {
+        Modifier
+            .background(style.card, shape)
+            .glassSurface(shape)
+    } else {
+        Modifier
+            .background(style.card, shape)
+            .border(1.dp, style.cardBorder, shape)
+    }
     Box(
         modifier = Modifier
             .offset { IntOffset(((screenW - cardWidth) / 2f).roundToInt(), top.roundToInt()) }
             .width(with(density) { cardWidth.toDp() })
-            .clip(shape)
-            .background(KeyPalette.bubble)
-            .border(1.dp, KeyPalette.bubbleBorder, shape)
+            .then(surface)
             .onSizeChanged { cardSize = it }
     ) {
         Column(
@@ -1165,7 +1340,7 @@ private fun TutorialCard(
                         .fillMaxWidth((Tutorial.step + 1f) / Tutorial.steps.size)
                         .fillMaxHeight()
                         .clip(CircleShape)
-                        .background(KeyPalette.accent)
+                        .background(style.accent)
                 )
             }
 
@@ -1198,9 +1373,10 @@ private fun TutorialCard(
                 TutorialPill(
                     arrow = TutorialArrow.Direction.LEFT,
                     metrics = metrics,
-                    background = KeyPalette.accent,
+                    background = style.accent,
                     width = navH * 1.55f,
                     height = navH,
+                    glass = style.glass,
                     onClick = onBack
                 )
                 Spacer(Modifier.width(metrics.sizeDp * 0.016f))
@@ -1210,6 +1386,7 @@ private fun TutorialCard(
                     background = KeyPalette.danger,
                     width = navH * 1.35f,
                     height = navH,
+                    glass = style.glass,
                     onClick = onExit
                 )
             }
@@ -1230,9 +1407,10 @@ private fun TutorialCard(
                 TutorialPill(
                     text = "确定",
                     metrics = metrics,
-                    background = KeyPalette.accent,
+                    background = style.accent,
                     width = null,
                     fillWidth = true,
+                    glass = style.glass,
                     onClick = onFinish
                 )
             }
@@ -1258,15 +1436,18 @@ private fun TutorialPill(
     width: Dp?,
     height: Dp = pillHeight(metrics),
     onClick: () -> Unit,
-    fillWidth: Boolean = false
+    fillWidth: Boolean = false,
+    glass: Boolean = false
 ) {
     val h = height
     val modifier = Modifier
         .height(h)
         .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
         .then(if (width != null) Modifier.width(width) else Modifier)
-        .clip(PillShape)
-        .background(background)
+        // 毛玻璃主题下胶囊也要"玻璃光泽 + 亮边"（和全应用的按键一致）；
+        // Material 主题保持实心胶囊。
+        .background(background, PillShape)
+        .then(if (glass) Modifier.glassSurface(PillShape) else Modifier)
         .clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
@@ -1355,6 +1536,7 @@ private object TutorialArrow {
 @Composable
 private fun TutorialExitConfirm(
     metrics: WatchMetrics,
+    style: TutorialStyle,
     onCancel: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -1369,12 +1551,16 @@ private fun TutorialExitConfirm(
         contentAlignment = Alignment.Center
     ) {
         val shape = MaterialTheme.shapes.large
+        val surface = if (style.glass) {
+            Modifier.glassSurface(shape)
+        } else {
+            Modifier.border(1.dp, style.cardBorder, shape)
+        }
         Box(
             modifier = Modifier
                 .width(metrics.sizeDp * 0.88f)
-                .clip(shape)
-                .background(KeyPalette.bubble)
-                .border(1.dp, KeyPalette.bubbleBorder, shape)
+                .background(style.card, shape)
+                .then(surface)
         ) {
             Column(modifier = Modifier.padding(metrics.sizeDp * 0.04f)) {
                 Text(
@@ -1400,6 +1586,7 @@ private fun TutorialExitConfirm(
                             background = KeyPalette.normalBright,
                             width = null,
                             fillWidth = true,
+                            glass = style.glass,
                             onClick = onCancel
                         )
                     }
@@ -1411,6 +1598,7 @@ private fun TutorialExitConfirm(
                             background = KeyPalette.danger,
                             width = null,
                             fillWidth = true,
+                            glass = style.glass,
                             onClick = onConfirm
                         )
                     }

@@ -691,7 +691,7 @@ internal class MathLayout(
             if (placeholders.isNotEmpty()) {
                 paint.style = Paint.Style.FILL
                 paint.pathEffect = null
-                paint.color = color.copy(alpha = 0.16f).toArgbCompat()
+                paint.color = color.copy(alpha = 0.26f).toArgbCompat()
                 for (ph in placeholders) {
                     native.drawRoundRect(
                         origin.x + ph.x,
@@ -851,7 +851,10 @@ internal fun layoutMath(
     }
 
     val s = MathLayoutBuilder(baseSizePx * scale, cooked.length, fonts, slot)
-    val laid = s.layoutItems(root.items, 0f, 0f, baseSizePx * scale)
+    // 基线 = 整行的 ascent：`MathLayout` 的坐标系约定是**左上角为原点**，
+    // 所以基线必须落在 y = ascent 处（而不是 0 —— 0 会让整行字形往上游走半个行高，
+    // 视觉重心因此不在输入框中心，用户报的"字符高度没有居中"就是这一条）。
+    val laid = s.layoutRoot(root, baseSizePx * scale)
     // 停靠点按源码下标排序：根号的**指数**画在左边、源码下标却在后面，
     // 不排序会让 [MathLayout.stopFor] 的"第一个不小于目标的停靠点"提前命中。
     s.stops.sortBy { it.index }
@@ -1102,6 +1105,19 @@ private class MathLayoutBuilder(
      */
     fun layoutRow(row: MRow, x: Float, baseline: Float, sizePx: Float): Laid =
         layoutItems(row.items, x, baseline, sizePx)
+
+    /**
+     * 排**整个公式**（根节点）。
+     *
+     * 和其它行不同，根节点的基线不能由调用方给 —— 它必须等于整行的 ascent，
+     * 这样所有字形 / 分数线 / 根号 / 槽位的 y 都落在 `[0, height]` 里，
+     * 调用方才能直接用 `(可用高度 - height) / 2` 做垂直居中。
+     */
+    fun layoutRoot(root: MRow, sizePx: Float): Laid {
+        var asc = 0f
+        for (item in root.items) asc = max(asc, measurer.measure(item, sizePx).asc)
+        return layoutItems(root.items, 0f, asc, sizePx)
+    }
 
     /**
      * 排一行。

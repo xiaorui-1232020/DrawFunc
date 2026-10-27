@@ -66,6 +66,20 @@ class ExpressionTest {
         assertEquals(1.0, e1("\\sin x", PI / 2), 1e-12)
         assertEquals(4.0, e1("\\left(x+1\\right)", 3.0), 1e-12)
         assertEquals(8.0, e1("x^{3}", 2.0), 1e-12)
+        // 底数写成下标的对数：LaTeX 是"底数在下标"，引擎是"底数在前"
+        assertEquals(3.0, e1("\\log_{2}{8}"), 1e-12)
+        assertEquals(3.0, e1("\\log_2 8"), 1e-12)
+        assertEquals(3.0, e1("\\log_2(8)"), 1e-12)
+        // 装饰命令只留内容（引擎没有这些结构）
+        assertEquals(3.0, e1("\\overline{x+1}", 2.0), 1e-12)
+        assertEquals(3.0, e1("\\vec{x}", 3.0), 1e-12)
+        // 角度符号不是上标
+        assertEquals(30.0, e1("30^\\circ"), 1e-12)
+        // 定界符 / 关系符至少能翻出来（求值会给出可读报错）。
+        // 命令名后面的空格照原样留着（引擎跳过空白，不影响求值），比较时先剔掉。
+        assertEquals("|x|", Latex.expand("\\lvert{x}\\rvert"))
+        assertEquals("x≤1", Latex.expand("x\\le 1").replace(" ", ""))
+        assertEquals("⌊x⌋", Latex.expand("\\lfloor x\\rfloor").replace(" ", ""))
         // 普通表达式一个字符都不动（快速路径）
         assertEquals("x^2+1", Latex.expand("x^2+1"))
     }

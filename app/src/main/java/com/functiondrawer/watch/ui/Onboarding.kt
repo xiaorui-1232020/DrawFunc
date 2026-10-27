@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Icon
 import androidx.compose.material.MaterialTheme
@@ -30,6 +30,7 @@ import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,24 +38,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.foundation.Image
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import com.functiondrawer.watch.R
 import com.functiondrawer.watch.ui.theme.FunctionDrawerTheme
 import com.functiondrawer.watch.ui.theme.PillShape
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlin.math.PI
 import kotlin.math.min
-import kotlin.math.sin
 
 /**
  * 应用的根：先欢迎流程，之后才是主界面。
@@ -134,26 +133,35 @@ private fun WelcomeFlow() {
     val dayMode = settings?.dayMode ?: Store.loadDayMode(context)
 
     FunctionDrawerTheme(dayMode = dayMode, glass = glass) {
-        BoxWithConstraints(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colors.background)
-        ) {
-            // 毛玻璃主题的背景风格：底色往下渐入强调色，再叠在实色底上。
-            if (glass) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                0f to Color.Transparent,
-                                0.55f to KeyPalette.accent.copy(alpha = 0.05f),
-                                1f to KeyPalette.accent.copy(
-                                    alpha = if (dayMode) 0.14f else 0.20f
-                                )
-                            )
-                        )
-                )
+        // ⚠️ `FunctionDrawerTheme` 只切全局色板，**不** provide `LocalGlassTheme`
+        // （那一层原本只在 `TabDeck` / `GraphScreen` 里给）。欢迎页在主题外壳外面，
+        // 所以这里自己 provide 一次，否则下面所有 `LocalGlassTheme.current` 都是 false，
+        // 「毛玻璃欢迎页」永远走不到。
+        CompositionLocalProvider(LocalGlassTheme provides glass) {
+            WelcomeFlowBody()
+        }
+    }
+}
+
+/**
+ * 欢迎流程的三屏（已套好主题）。
+ *
+ * 白天 / 夜间不单独传参：`FunctionDrawerTheme` 已经把色板切成对应的那一套，
+ * [rememberWelcomeStyle] 直接从 `GlassTokens.isLight` 读回来（见那边）。
+ */
+@Composable
+private fun WelcomeFlowBody() {
+    val context = LocalContext.current
+    // 欢迎页的四套外观（Material / 毛玻璃 × 白天 / 夜间），见 [rememberWelcomeStyle]。
+    val style = rememberWelcomeStyle()
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colors.background)
+    ) {
+            // 底纹由外观决定：Material 平涂、毛玻璃铺一层强调色的柔光（见 [WelcomeStyle.wash]）。
+            style.wash?.let { brush ->
+                Box(Modifier.fillMaxSize().background(brush))
             }
             val density = LocalDensity.current
             val sizePx = min(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
@@ -220,7 +228,7 @@ private fun WelcomeFlow() {
                                     text = "开始",
                                     accent = true,
                                     metrics = metrics,
-                                    glass = glass,
+                                    style = style,
                                     onClick = { page = 1 }
                                 )
                             }
@@ -243,7 +251,7 @@ private fun WelcomeFlow() {
                                     text = "方屏",
                                     selected = shape == ScreenShape.SQUARE,
                                     metrics = metrics,
-                                    glass = glass,
+                                    style = style,
                                     onClick = {
                                         shape = ScreenShape.SQUARE
                                         AppPrefs.setScreenShape(context, ScreenShape.SQUARE)
@@ -253,7 +261,7 @@ private fun WelcomeFlow() {
                                     text = "圆屏",
                                     selected = shape == ScreenShape.ROUND,
                                     metrics = metrics,
-                                    glass = glass,
+                                    style = style,
                                     onClick = {
                                         shape = ScreenShape.ROUND
                                         AppPrefs.setScreenShape(context, ScreenShape.ROUND)
@@ -264,7 +272,7 @@ private fun WelcomeFlow() {
                                     text = "下一步",
                                     accent = true,
                                     metrics = metrics,
-                                    glass = glass,
+                                    style = style,
                                     onClick = { page = 2 }
                                 )
                             }
@@ -287,14 +295,14 @@ private fun WelcomeFlow() {
                                     text = "进入新手教程",
                                     accent = true,
                                     metrics = metrics,
-                                    glass = glass,
+                                    style = style,
                                     onClick = { finish(true) }
                                 )
                                 WelcomeButton(
                                     text = "先自己摸索",
                                     accent = false,
                                     metrics = metrics,
-                                    glass = glass,
+                                    style = style,
                                     onClick = { finish(false) }
                                 )
                             }
@@ -302,6 +310,93 @@ private fun WelcomeFlow() {
                     }
                 }
             }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 欢迎页的四套外观（2026-10-27 新增）
+//
+// 用户原话："请为 material 主题和毛玻璃主题的白天模式和夜间模式各写一套
+// 欢迎界面和新手教程的样式。"
+//
+// 这里管欢迎页（标题/副标题用色、底纹、按钮材质），教程那侧的对应实现见
+// `Tutorial.kt` 的 [rememberTutorialStyle]。两处都按 (毛玻璃?, 白天?) 四格取一套，
+// **不再**在各控件里写 `if (glass && day)` 这种散装判断。
+// ---------------------------------------------------------------------------
+
+/**
+ * 欢迎页的一套外观。
+ *
+ * @param glass 是否毛玻璃主题（按钮/选项叠 [glassSurface]）。
+ * @param day 白天模式。
+ * @param wash 铺在底色上的渐变（null = 平涂）。
+ * @param primary 主按钮（「开始」「下一步」）底色。
+ * @param secondary 次按钮 / 未选中的选项底色。
+ * @param selected 选中的选项底色。
+ */
+internal class WelcomeStyle(
+    val glass: Boolean,
+    val day: Boolean,
+    val wash: Brush?,
+    val primary: Color,
+    val secondary: Color,
+    val selected: Color
+)
+
+/**
+ * 当前该用哪一套（四格都是**点名写定**的，不再由各控件自己拼）。
+ *
+ * | | 白天 | 夜间 |
+ * |---|---|---|
+ * | **Material** | 平涂浅底；主按钮实心强调色、次按钮灰药丸 | 平涂深底；同一套实心按钮 |
+ * | **毛玻璃** | 白 60% 底 + 顶部一点白光往强调色走；按钮半透明白玻璃 | 深底 + 底部强调色柔光；按钮深玻璃 |
+ */
+@Composable
+internal fun rememberWelcomeStyle(): WelcomeStyle {
+    val glass = LocalGlassTheme.current
+    val day = GlassTokens.isLight
+    return remember(glass, day) {
+        when {
+            // 毛玻璃 · 白天：浅底上"更白"才像玻璃，光从顶部扫下来
+            glass && day -> WelcomeStyle(
+                glass = true, day = true,
+                wash = Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = 0.18f),
+                    0.55f to KeyPalette.accent.copy(alpha = 0.04f),
+                    1f to KeyPalette.accent.copy(alpha = 0.10f)
+                ),
+                primary = GlassTokens.accent,
+                secondary = GlassTokens.surface,
+                selected = GlassTokens.accent
+            )
+            // 毛玻璃 · 夜间：底部强调色回光（和表盘上的玻璃磁贴同一个味道）
+            glass -> WelcomeStyle(
+                glass = true, day = false,
+                wash = Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.55f to KeyPalette.accent.copy(alpha = 0.05f),
+                    1f to KeyPalette.accent.copy(alpha = 0.20f)
+                ),
+                primary = GlassTokens.accent,
+                secondary = GlassTokens.surface,
+                selected = GlassTokens.accent
+            )
+            // Material · 白天：平涂，实心按钮
+            day -> WelcomeStyle(
+                glass = false, day = true,
+                wash = null,
+                primary = KeyPalette.accent,
+                secondary = KeyPalette.normal,
+                selected = KeyPalette.accent
+            )
+            // Material · 夜间：平涂，实心按钮
+            else -> WelcomeStyle(
+                glass = false, day = false,
+                wash = null,
+                primary = KeyPalette.accent,
+                secondary = KeyPalette.normal,
+                selected = KeyPalette.accent
+            )
         }
     }
 }
@@ -312,17 +407,12 @@ private fun WelcomeButton(
     text: String,
     accent: Boolean,
     metrics: WatchMetrics,
-    glass: Boolean = false,
+    style: WelcomeStyle,
     onClick: () -> Unit
 ) {
     Surface(
-        // 毛玻璃主题走玻璃底板（半透明 + 亮边），其余主题保持实心药丸。
-        color = when {
-            glass && accent -> GlassTokens.accent
-            glass -> GlassTokens.surface
-            accent -> KeyPalette.accent
-            else -> KeyPalette.normal
-        },
+        // 底色由外观给：毛玻璃是半透明玻璃，Material 是实心药丸。
+        color = if (accent) style.primary else style.secondary,
         contentColor = KeyPalette.text,
         shape = PillShape,
         modifier = Modifier
@@ -330,7 +420,7 @@ private fun WelcomeButton(
             // 2026-10-27：用户要求"退出新手教程的界面的按钮高度要变成原来的两倍"
             // （那一屏就是这里的"要现在学一遍吗"）。0.14 → 0.28。
             .height(metrics.sizeDp * 0.28f)
-            .then(if (glass) Modifier.glassSurface(PillShape) else Modifier)
+            .then(if (style.glass) Modifier.glassSurface(PillShape) else Modifier)
             .clickable(onClick = onClick)
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -352,23 +442,18 @@ private fun WelcomeChoice(
     text: String,
     selected: Boolean,
     metrics: WatchMetrics,
-    glass: Boolean = false,
+    style: WelcomeStyle,
     onClick: () -> Unit
 ) {
     Surface(
         // 玻璃主题下：选中 = 强调色底板，未选中 = 玻璃底板。
-        color = when {
-            glass && selected -> GlassTokens.accent
-            glass -> GlassTokens.surface
-            selected -> KeyPalette.accent
-            else -> KeyPalette.normal
-        },
+        color = if (selected) style.selected else style.secondary,
         contentColor = KeyPalette.text,
         shape = PillShape,
         modifier = Modifier
             .fillMaxWidth()
             .height(metrics.sizeDp * 0.17f)
-            .then(if (glass) Modifier.glassSurface(PillShape) else Modifier)
+            .then(if (style.glass) Modifier.glassSurface(PillShape) else Modifier)
             .clickable(onClick = onClick)
     ) {
         Row(
@@ -397,51 +482,42 @@ private fun WelcomeChoice(
 }
 
 /**
- * 应用图标：用 Canvas 现画（圆角方块 + 坐标轴 + 一条正弦曲线）。
+ * 应用图标（**就是启动器用的那个图标**）。
  *
- * ⚠️ **不能用 `painterResource(R.mipmap.ic_launcher)`**：这个包的自适应图标是矢量 XML，
- * 在真机上会抛 `Only VectorDrawables and rasterized asset types are supported`。
- * 自己画还有一个好处：配色跟着当前主题走，不依赖任何资源。
+ * ## 为什么不再自己画（2026-10-27）
+ *
+ * 用户原话："预编译界面图标还是没有用应用图标，还是你自己画的，请你换成应用图标，
+ * 欢迎界面也一样。"
+ *
+ * 旧版本用 Canvas 现画一个"圆角方块 + 坐标轴 + 正弦"，是**仿**着图标画的仿制品。
+ * 现在直接读启动器图标的两个资源：
+ *   * 背景 —— `@color/ic_launcher_background`（`#0B1418`，和自适应图标同一色值）；
+ *   * 前景 —— `@drawable/ic_launcher_foreground`（自适应图标的前景矢量）。
+ *
+ * ⚠️ **不能**用 `painterResource(R.mipmap.ic_launcher)`：`mipmap-anydpi-v26` 那份是
+ * `<adaptive-icon>`，`painterResource` 只认 VectorDrawable / 位图，运行时会抛
+ * `Only VectorDrawables and rasterized asset types are supported`。
+ * 所以这里用 `ImageVector.vectorResource` 读**前景矢量**，再自己铺背景 ——
+ * 得到的画面和系统裁出来的图标一致（自适应图标就是这么合成的）。
  */
 @Composable
 internal fun AppMark(size: Dp) {
-    Canvas(modifier = Modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val corner = w * 0.28f
-        drawRoundRect(
-            color = KeyPalette.accentDeep,
-            cornerRadius = CornerRadius(corner, corner)
-        )
-
-        val pad = w * 0.18f
-        val axis = KeyPalette.text.copy(alpha = 0.30f)
-        drawLine(
-            color = axis,
-            start = Offset(pad, h - pad),
-            end = Offset(w - pad, h - pad),
-            strokeWidth = w * 0.018f
-        )
-        drawLine(
-            color = axis,
-            start = Offset(pad, pad),
-            end = Offset(pad, h - pad),
-            strokeWidth = w * 0.018f
-        )
-
-        // 一条正弦曲线：和这个 App 画出来的东西是同一件事
-        val steps = 64
-        val path = Path()
-        for (i in 0..steps) {
-            val t = i / steps.toFloat()
-            val x = pad + (w - 2f * pad) * t
-            val y = h * 0.5f - sin(t * 2f * PI.toFloat()) * h * 0.17f
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(
-            path = path,
-            color = KeyPalette.text,
-            style = Stroke(width = w * 0.045f, cap = StrokeCap.Round)
+    val foreground = ImageVector.vectorResource(id = R.drawable.ic_launcher_foreground)
+    Box(
+        modifier = Modifier
+            .size(size)
+            // 启动器的图标蒙版是圆角方形（圆表上系统再裁圆），这里用同一比例。
+            .clip(RoundedCornerShape(size * 0.28f))
+            .background(LauncherIconBackground),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            imageVector = foreground,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize()
         )
     }
 }
+
+/** `@color/ic_launcher_background` 的值 —— Compose 里读 `Color` 资源要绕一圈，这里直接写常量。 */
+private val LauncherIconBackground = Color(0xFF0B1418)

@@ -23,11 +23,23 @@ package com.functiondrawer.watch.engine
  * | `\pi` `\tau` `\varphi` | `pi` `tau` `phi` |
  * | `\alpha` `\theta` … | 保留原希腊字母（引擎不认识会给出可读报错） |
  * | `\sin` `\cos` `\ln` `\log` … | `sin` `cos` `ln` `log`（后面照旧可省括号） |
+ * | `\log_{a}{b}` / `\log_a b` / `\log_a(b)` | `log(a,b)`（引擎的底数在前，见 `MathFns`） |
  * | `\cdot` `\times` `\div` | `*` `*` `/` |
  * | `\left(` `\right)` `\bigl[` … | 直接丢掉命令，只留括号 |
+ * | `\lvert` `\rvert` `\vert` `\Vert` | `\|` |
+ * | `\langle` `\rangle` `\lfloor` `\rfloor` `\lceil` `\rceil` | `⟨` `⟩` `⌊` `⌋` `⌈` `⌉` |
  * | `\mathrm{…}` `\text{…}` `\operatorname{…}` | 只留花括号里的内容 |
+ * | `\overline{…}` `\vec{…}` `\hat{…}` `\bar{…}` … | 只留内容（引擎没有装饰结构） |
  * | `\,` `\;` `\!` `\quad` | 空格或直接删掉 |
  * | `\{` `\}` `\%` | `(` `)` `%` |
+ * | `30^\circ` / `x\degree` | `30` / `x`（角度符号不是上标） |
+ *
+ * ### 不等式 / 求和 / 积分
+ *
+ * 引擎是"一条曲线一个表达式"的求值器（见 `PlotMode`），没有比较运算、
+ * 也没有求和积分节点。这几类命令**不静默删掉**，而是翻成对应的 Unicode 符号
+ * （`≤` `≥` `≠` `∑` `∫` …）—— 排版能画出来，求值时会给出
+ * "看不懂这个字符"的可读报错，比删成 `x2` 这种鬼东西诚实。
  *
  * 不认识的命令**静默删掉**：LaTeX 里大量命令（`\displaystyle`、`\limits` …）
  * 只是排版提示，删掉比报"看不懂"更接近用户预期；真正的未知标识符
@@ -59,14 +71,29 @@ internal object Latex {
 
                 // 上标写成 `^{...}`：引擎只认 `^(...)`
                 c == '^' -> {
-                    out.append('^')
-                    i++
-                    if (i < to && src[i] == '{') {
-                        val end = matchingBrace(src, i, to)
-                        out.append('(')
-                        out.append(expandRange(src, i + 1, minOf(end, to)))
-                        out.append(')')
-                        i = end + 1
+                    // `^\circ` / `\degree` 是**角度符号**，不是上标：整段丢掉
+                    //（否则会留下一个悬空的 `^`，词法器直接报错）
+                    var j = i + 1
+                    while (j < to && src[j].isWhitespace()) j++
+                    var degreeName = ""
+                    if (j < to && src[j] == '\\') {
+                        var k = j + 1
+                        val s = k
+                        while (k < to && src[k].isLetter()) k++
+                        degreeName = src.substring(s, k)
+                    }
+                    if (degreeName == "circ" || degreeName == "degree") {
+                        i = j + 1 + degreeName.length
+                    } else {
+                        out.append('^')
+                        i++
+                        if (i < to && src[i] == '{') {
+                            val end = matchingBrace(src, i, to)
+                            out.append('(')
+                            out.append(expandRange(src, i + 1, minOf(end, to)))
+                            out.append(')')
+                            i = end + 1
+                        }
                     }
                 }
 
@@ -121,6 +148,49 @@ internal object Latex {
             }
         }
         return to
+    }
+
+    /**
+     * 和 [matchingBrace] 一样，找与 [open] 处的 `(` 配对的 `)`。
+     *
+     * 给 `\log_a(b)` 这种"下标 + 括号实参"的写法用：只取括里的内容，
+     * 括号本身丢掉（外面会再包一层 `log(…)`）。
+     */
+    private fun matchingParen(src: String, open: Int, to: Int): Int {
+        var depth = 0
+        var i = open
+        while (i < to) {
+            when (src[i]) {
+                '\\' -> i += 2
+                '(' -> {
+                    depth++
+                    i++
+                }
+                ')' -> {
+                    depth--
+                    if (depth == 0) return i
+                    i++
+                }
+                else -> i++
+            }
+        }
+        return to
+    }
+
+    /**
+     * 读一个实参：`{...}` / `(...)` / 单个原子都算。
+     *
+     * 和 [argument] 的区别只在括号：`\log_2(8)` 的真实参是 `8`，
+     * 不是 `(`（[argument] 会把单字符 `(` 当原子）。
+     */
+    private fun argumentOrGroup(src: String, at: Int, to: Int): Pair<String, Int> {
+        var i = at
+        while (i < to && src[i].isWhitespace()) i++
+        if (i < to && src[i] == '(') {
+            val end = matchingParen(src, i, to)
+            return expandRange(src, i + 1, minOf(end, to)) to (end + 1)
+        }
+        return argument(src, i, to)
     }
 
     /** 处理一个 `\命令`，把结果写进 [out]，返回命令之后的下标。 */
@@ -199,6 +269,150 @@ internal object Latex {
                 out.append('/')
                 return i
             }
+            "bmod", "mod" -> {
+                out.append(" mod ")
+                return i
+            }
+
+            // ---- 装饰 / 定界符：只留结构里能求值的那部分 ----
+            "overline", "underline", "bar", "vec", "hat", "widehat",
+            "tilde", "widetilde", "dot", "ddot", "breve", "check",
+            "acute", "grave", "overbrace", "underbrace", "boxed",
+            "colorbox", "cancel", "bcancel", "xcancel" -> {
+                val (body, next) = argument(src, i, to)
+                out.append(body)
+                return next
+            }
+            "lvert", "rvert", "vert", "lVert", "rVert", "Vert" -> {
+                out.append('|')
+                return i
+            }
+            "langle" -> {
+                out.append('⟨')
+                return i
+            }
+            "rangle" -> {
+                out.append('⟩')
+                return i
+            }
+            "lfloor" -> {
+                out.append('⌊')
+                return i
+            }
+            "rfloor" -> {
+                out.append('⌋')
+                return i
+            }
+            "lceil" -> {
+                out.append('⌈')
+                return i
+            }
+            "rceil" -> {
+                out.append('⌉')
+                return i
+            }
+            // 角度符号：单独出现时直接吞掉（`30\degree` → `30`）
+            "circ", "degree" -> {
+                return i
+            }
+
+            // ---- 排版能画、但引擎求不了值的符号（见文件头）----
+            "le", "leq" -> {
+                out.append('≤')
+                return i
+            }
+            "ge", "geq" -> {
+                out.append('≥')
+                return i
+            }
+            "ne", "neq" -> {
+                out.append('≠')
+                return i
+            }
+            "approx" -> {
+                out.append('≈')
+                return i
+            }
+            "equiv" -> {
+                out.append('≡')
+                return i
+            }
+            "lt" -> {
+                out.append('<')
+                return i
+            }
+            "gt" -> {
+                out.append('>')
+                return i
+            }
+            "pm" -> {
+                out.append('±')
+                return i
+            }
+            "mp" -> {
+                out.append('∓')
+                return i
+            }
+            "sim" -> {
+                out.append('∼')
+                return i
+            }
+            "propto" -> {
+                out.append('∝')
+                return i
+            }
+            "sum" -> {
+                out.append('∑')
+                return i
+            }
+            "prod" -> {
+                out.append('∏')
+                return i
+            }
+            "int" -> {
+                out.append('∫')
+                return i
+            }
+            "oint" -> {
+                out.append('∮')
+                return i
+            }
+            "in" -> {
+                out.append('∈')
+                return i
+            }
+            "notin" -> {
+                out.append('∉')
+                return i
+            }
+            "to", "rightarrow" -> {
+                out.append('→')
+                return i
+            }
+            "leftarrow" -> {
+                out.append('←')
+                return i
+            }
+            "infty" -> {
+                out.append("inf")
+                return i
+            }
+            "angle" -> {
+                out.append('∠')
+                return i
+            }
+            "triangle" -> {
+                out.append('△')
+                return i
+            }
+            "perp" -> {
+                out.append('⊥')
+                return i
+            }
+            "parallel" -> {
+                out.append('∥')
+                return i
+            }
 
             // ---- 空白 ----
             "quad", "qquad", "enspace", "thinspace" -> {
@@ -215,6 +429,24 @@ internal object Latex {
 
         // ---- 函数名（照旧可以省括号：`\sin x` → `sin x`）----
         FUNCTIONS[name]?.let { fn ->
+            // 带下标的函数：`\log_{a}{b}` / `\log_a(b)` / `\sin_{n}(x)`
+            var j = i
+            while (j < to && src[j].isWhitespace()) j++
+            if (j < to && src[j] == '_') {
+                val (base, afterBase) = argument(src, j + 1, to)
+                if (fn == "log" || fn == "lg" || fn == "lb") {
+                    // 引擎的约定是 `log(底数, 真数)`（见 MathFns：log(b,x) = ln x / ln b），
+                    // 而 LaTeX 里底数写在**下标** —— 顺序正好一致，直接拼就行。
+                    // 后面没写实参时就留成 `log(底数,)` —— 和键盘插的模板同形，
+                    // 用户接着输入真数即可。
+                    val (value, next) = argumentOrGroup(src, afterBase, to)
+                    out.append("log(").append(base).append(',').append(value).append(')')
+                    return next
+                }
+                // 其它函数的下标只是标签（\|sin_{n}），丢掉
+                out.append(fn)
+                return afterBase
+            }
             out.append(fn)
             return i
         }
@@ -272,7 +504,12 @@ internal object Latex {
         "max" to "max",
         "floor" to "floor",
         "ceil" to "ceil",
-        "round" to "round"
+        "round" to "round",
+        "deg" to "deg",
+        "rad" to "rad",
+        "gamma" to "gamma",
+        "erf" to "erf",
+        "sinc" to "sinc"
     )
 
     /**

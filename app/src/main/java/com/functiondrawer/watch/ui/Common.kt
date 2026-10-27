@@ -1118,46 +1118,60 @@ fun Modifier.glassSurface(shape: Shape, elevation: Dp = 5.dp): Modifier {
     // ---- 按钮下阴影 ----
     //
     // 强度来自设置页的「按钮下阴影强度」（`activeKeyShadow`，默认 10%）。
-    // 先给一个 0.10 的底，再乘用户那一档：默认 10% 时已经有明确的"浮起来"，
-    // 拉到 100% 时会很重（那是用户自己选的，不在代码里压住）。
+    //
+    // 2026-10-27（本轮）：用户原话"当设置里设置按钮下阴影强度为0时，按钮下应该
+    // 没有阴影，现在的阴影太重了"。旧写法是 `0.10 + 0.62 × strength` ——
+    // 带一个 0.10 的**底数**，于是拉到 0 仍然有一层影；而且 0.62 的斜率让
+    // 默认 10% 就已经很重。
+    // 现在：**0 就是真的 0**（整段投影直接跳过），斜率降到 0.34，
+    // 100% 时也只有原来的六成左右。
     val strength = activeKeyShadow.value.coerceIn(0f, 1f)
-    val shadowBase = 0.10f + 0.62f * strength
+    val shadowBase = 0.34f * strength
     return this
         // ---- ① 柔和投影：手绘，不依赖平台 `.shadow` ----
         .drawBehind {
             val h = size.height
             val w = size.width
             if (h <= 0f || w <= 0f) return@drawBehind
+            // 强度 0 → 一个字节都不画（用户要求"0 时按钮下没有阴影"）
+            if (shadowBase <= 0.001f) return@drawBehind
             // ColorOS 16 的悬浮感 = "更散的环境影（往下偏）+ 一圈贴边的接触影"。
-            // 没有离屏模糊，就用 4 层同心圆角矩形叠出柔边：越外越大、越淡。
-            val drop = elevation.toPx() * 0.55f + h * 0.06f
-            for (i in 4 downTo 1) {
-                val grow = h * 0.045f * i
+            // 没有离屏模糊，就用 3 层同心圆角矩形叠出柔边：越外越大、越淡。
+            val drop = elevation.toPx() * 0.5f + h * 0.05f
+            for (i in 3 downTo 1) {
+                val grow = h * 0.04f * i
                 drawRoundRect(
-                    color = Color.Black.copy(alpha = shadowBase * 0.55f / i),
+                    color = Color.Black.copy(alpha = shadowBase * 0.42f / i),
                     topLeft = Offset(-grow * 0.5f, drop - grow * 0.5f + h * 0.02f),
                     size = Size(w + grow, h + grow),
                     cornerRadius = CornerRadius((h + grow) * 0.5f)
                 )
             }
-            // 最强的一层贴在下缘 1dp 处：这是"接触影"，让按钮看起来真的落在底上。
+            // 贴下缘的一层"接触影"：让按钮看起来真的落在底上（只剩薄薄一条）。
             drawRoundRect(
-                color = Color.Black.copy(alpha = shadowBase * 0.34f),
-                topLeft = Offset(w * 0.08f, h * 0.90f),
-                size = Size(w * 0.84f, h * 0.14f),
-                cornerRadius = CornerRadius(h * 0.07f)
+                color = Color.Black.copy(alpha = shadowBase * 0.22f),
+                topLeft = Offset(w * 0.10f, h * 0.92f),
+                size = Size(w * 0.80f, h * 0.10f),
+                cornerRadius = CornerRadius(h * 0.05f)
             )
         }
         // ⚠️ border 必须在**内容**的最外层：Compose 的绘制顺序是内层先画，
         // border 放里面会被背景和光泽盖住（就是"按钮没有玻璃边框"的原因）。
+        //
+        // 2026-10-27（本轮，参照手表 ColorOS 16 的开关磁贴）：
+        // 那套按钮最显著的特征不是"很重的投影"，而是
+        //   * 一圈**整圈都亮**的细边（上亮 → 中间略暗 → 下沿再亮回来）；
+        //   * 面本身几乎不透明，只在上下两沿各有一道很窄的高光；
+        //   * 中间偏暗一点，于是整块面看着像"有厚度"的玻璃砖。
+        // 旧写法只有顶部一道 16% 的宽渐变，出来像一块塑料片。
         .border(
             width = 1.dp,
             brush = Brush.verticalGradient(
-                // 夜间：白 42% → 10% → 18%（深色底上的边缘高光）
-                // 白天：白 90% → 35% → 55%（浅色底上要靠"更白"才看得出边）
-                0f to Color.White.copy(alpha = if (light) 0.90f else 0.42f),
-                0.45f to Color.White.copy(alpha = if (light) 0.35f else 0.10f),
-                1f to Color.White.copy(alpha = if (light) 0.55f else 0.18f)
+                // 夜间：白 62% → 20% → 34%（深色底上的边缘高光）
+                // 白天：白 95% → 45% → 62%（浅色底上要靠"更白"才看得出边）
+                0f to Color.White.copy(alpha = if (light) 0.95f else 0.62f),
+                0.5f to Color.White.copy(alpha = if (light) 0.45f else 0.20f),
+                1f to Color.White.copy(alpha = if (light) 0.62f else 0.34f)
             ),
             shape = shape
         )
@@ -1167,30 +1181,38 @@ fun Modifier.glassSurface(shape: Shape, elevation: Dp = 5.dp): Modifier {
             val h = size.height
             val w = size.width
             if (h <= 0f || w <= 0f) return@drawWithContent
-            // 顶部 62% 的白色光泽：
-            //   夜间 16% → 5%（提亮）
-            //   白天 55% → 12%（浅底上"更白"才像玻璃反光）
+            // ① 顶部高光（窄，只占上沿 34%）：白 20% → 3%
             drawRect(
                 brush = Brush.verticalGradient(
-                    0f to Color.White.copy(alpha = if (light) 0.55f else 0.16f),
-                    0.55f to Color.White.copy(alpha = if (light) 0.12f else 0.05f),
+                    0f to Color.White.copy(alpha = if (light) 0.60f else 0.20f),
                     1f to Color.Transparent,
                     startY = 0f,
-                    endY = h * 0.62f
+                    endY = h * 0.34f
                 ),
-                size = Size(w, h * 0.62f)
+                size = Size(w, h * 0.34f)
             )
-            // 底缘一道极淡的暗边：ColorOS 16 的玻璃有"下厚上薄"的体积感，
-            // 少了这一笔，整块面会像一张贴在屏上的白纸。
+            // ② 底沿回光（ColorOS 那套的"下厚上薄"）：白 0% → 12%
             drawRect(
                 brush = Brush.verticalGradient(
                     0f to Color.Transparent,
-                    1f to Color.Black.copy(alpha = if (light) 0.06f else 0.10f),
-                    startY = h * 0.72f,
+                    1f to Color.White.copy(alpha = if (light) 0.34f else 0.12f),
+                    startY = h * 0.74f,
                     endY = h
                 ),
-                topLeft = Offset(0f, h * 0.72f),
-                size = Size(w, h * 0.28f)
+                topLeft = Offset(0f, h * 0.74f),
+                size = Size(w, h * 0.26f)
+            )
+            // ③ 中间的"体积暗部"：极淡一层，让上下两道高光之间有落差
+            drawRect(
+                brush = Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.5f to Color.Black.copy(alpha = if (light) 0.05f else 0.09f),
+                    1f to Color.Transparent,
+                    startY = h * 0.28f,
+                    endY = h * 0.80f
+                ),
+                topLeft = Offset(0f, h * 0.28f),
+                size = Size(w, h * 0.52f)
             )
         }
 }

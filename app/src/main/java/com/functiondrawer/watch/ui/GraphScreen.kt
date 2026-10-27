@@ -2574,9 +2574,18 @@ private fun GraphRoute(
     // 只对**新增**的函数播"被画出来"的动画（见 GraphState.consumeReveal）。
     // 底图不消费它：消费掉之后用户真正走回图像界面时，新函数就不会被"画出来"了
     // （用户看到的是"新函数直接出现"，而这一步本该有动画）。
+    //
+    // ⚠️ 必须**等图像界面真的在屏幕上**再消费（用户反馈 10："函数创建之后的揭示动画没有"）：
+    // 编辑器是边打边写的（`onChange` 直接 `updateFunction`），而这一屏是**常驻组合**的
+    // （`DrawerDeck` 的 graph 槽位恒为 true）—— 在 Route.Editor 下就消费的话，
+    // 动画会在编辑器底下悄悄播完，用户点"确定"回到图像界面时只剩一条完整的线。
+    // `state.route` 进 key 是必须的：最后一笔输入时 functions 已经变了，
+    // 单靠 functions 变化不会在"回到图像界面"这一拍重跑。
     var revealIds by remember { mutableStateOf(emptySet<Long>()) }
-    LaunchedEffect(state.functions, backdrop) {
-        if (!backdrop) revealIds = state.consumeReveal(state.functions)
+    LaunchedEffect(state.functions, backdrop, state.route) {
+        if (backdrop) return@LaunchedEffect
+        if (state.route !is Route.Graph) return@LaunchedEffect
+        revealIds = state.consumeReveal(state.functions)
     }
 
     // 揭示动画进行中 = 底部提示条**锁住**（用户反馈 3：动画播完之前不许拖开抽屉）。
@@ -2675,7 +2684,10 @@ private fun GraphRoute(
      * 本轮**未改动**（真机验证播放是好的）。
      */
     val playingSlider = state.sliders.firstOrNull { it.playing }
-    LaunchedEffect(playingSlider?.id, playingSlider?.playing) {
+    // key 用 `sliderPlayToken`（每按一次 ▶ +1）而不是 `playing` 布尔量：
+    // 停 → 再播时协程可能在旧的一拍里还没退干净，同一个 `(id, true)` 起不来
+    // —— 那就是用户报的"滑动条只能播放一次"。
+    LaunchedEffect(playingSlider?.id, state.sliderPlayToken) {
         if (playingSlider == null) return@LaunchedEffect
         // **底图不驱动播放**：它是"只画"的一层，用户此刻所在的地方是浮窗下面
         // 原来那一屏（函数列表）。播放键是"等回到图像界面之后才开始跑"的
@@ -2823,6 +2835,8 @@ private fun GraphRoute(
             shadowIds = setOfNotNull(state.tappedId, state.tappedObjectId),
             // ---- #9：工具画出来的几何对象 ----
             objects = state.objects + state.complexResultPoints(),
+            // 正在被手指拖的点：画一圈"抓住了"的光环（需求 13）
+            draggingPointId = state.draggingPointId,
             // 交点 / 极值点的 60% 光晕（#7 后半）—— 奶油黄
             highlightPoints = highlightPoints,
             // 工具已经选中的点 + 正在拖的临时描点（#9）—— 强调蓝
@@ -2869,6 +2883,12 @@ private fun GraphRoute(
                         if (state.activeTool != FunctionTool.PLOT_POINT) return@pointerInput
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            // 按在**已有的点**上：这一串交给下面的手势 1b（拖动那个点），
+                            // 不再描一个新点（用户需求 13："拖动点的效果没有实装"）。
+                            // 不跳过的话，拖点会变成"又描出一个点、两个点一起动"。
+                            if (state.draggablePointAt(down.position.x, down.position.y) != null) {
+                                return@awaitEachGesture
+                            }
                             state.beginPendingPoint(down.position.x, down.position.y)
                             var cancelled = false
                             while (true) {
@@ -2918,7 +2938,13 @@ private fun GraphRoute(
                 .then(
                     if (!interactive) Modifier else Modifier
                         .pointerInput(state.activeTool, state.isMoveTool, state.tappedObjectId) {
-                            if (!state.isMoveTool) return@pointerInput
+                            // 拖点：移动模式随时可拖；**描点模式**也允许 —— 只要按下时
+                            // 手指底下就是一个已有的点（上面手势 1 已经跳过了"描新点"）。
+                            // 用户需求 13："拖动点的效果没有实装"。其它工具不抢这一串：
+                            // 那些工具按下就要"选点"，不能被拖动劫持（需求 12）。
+                            val dragAllowed = state.isMoveTool ||
+                                state.activeTool == FunctionTool.PLOT_POINT
+                            if (!dragAllowed) return@pointerInput
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 val id = state.draggablePointAt(down.position.x, down.position.y)
@@ -3009,33 +3035,23 @@ private fun GraphRoute(
                                 return@pointerInput
                             }
 
-                            // 工具模式：**自己的"宽容一点"的点击**。
+                            // 工具模式：**按下就有点**（用户需求 12）。
                             //
-                            // 为什么不用 `detectTapGestures`：只要手指挪动超过触摸容差，
-                            // 它就**一个回调都不给**（不算 tap）。在工具模式下拖动又
-                            // 什么都不做（平移被刻意关掉了），于是"手指稍微滑了一下"
-                            // 看起来就是"点了没反应" —— 表盘只有 233dp，手指滑动是常态。
-                            // 所以这里自己收手势：抬手时**按抬手位置**交给工具状态机，
-                            // 中间怎么滑都不影响（选点时吸附本来就是在抬手位置做的）。
+                            // 用户原话："除了描点之外的所有功能…都不是描点那套按下就有
+                            // 点的逻辑，而是松手才有点，请统一成按下就有点。"
+                            // 于是这里不再等抬手：`awaitFirstDown` 拿到位置的那一拍就把
+                            // 它交给工具状态机（选点 / 落点 / 判定），和描点工具**同一套手感**。
+                            //
+                            // 也不再需要自己吞"手指滑过容差"那段：一次按下只产生一次选择，
+                            // 之后无论手怎么滑都只当这一次已经结束了 —— 这正是用户要的
+                            // "按下就有，不用等松手还把手指位置改来改去"。
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
-                                var last = down.position
-                                var released = false
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                    if (change.changedToUpIgnoreConsumed()) {
-                                        last = change.position
-                                        released = true
-                                        break
-                                    }
-                                    // 别的手势吃掉了（比如底部上滑回列表）→ 这次不算点选
-                                    if (change.isConsumed) break
-                                    last = change.position
-                                }
-                                if (released) {
-                                    state.toolTap(last.x, last.y)?.let { state.showToast(it) }
-                                }
+                                // 手指按在底部提示条这类浮层上时，down 已经被它们消费，
+                                // 这一下不该喂给工具（和原来"被别的手势吃掉就不算点选"一致）。
+                                if (down.isConsumed) return@awaitEachGesture
+                                state.toolTap(down.position.x, down.position.y)
+                                    ?.let { state.showToast(it) }
                             }
                         }
                 )
@@ -3050,6 +3066,10 @@ private fun GraphRoute(
                     if (!interactive) Modifier else Modifier.pointerInput(state.isMoveTool) {
                         if (!state.isMoveTool) return@pointerInput
                         detectTransformGestures { centroid, pan, zoom, _ ->
+                            // 正在拖点：这一串**不许平移**（需求 13）——
+                            // 否则点跟着手指走的同时整张图也在跟着走，
+                            // 看起来就像"什么都没发生，只是图像滑了一下"。
+                            if (state.draggingPointId != null) return@detectTransformGestures
                             // 工具模式下这段手势根本不存在（key 已经把它停掉了）：
                             // 拖动留给"描点跟手"，量角度时图像不会跟着手指乱跑。
                             state.transformBy(pan.x, pan.y, zoom, centroid.x, centroid.y)

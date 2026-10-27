@@ -99,19 +99,34 @@ internal object Precompile {
      * 顺序是按"第一次用到的时间点"排的：配色最早（首帧就要）、字体和解窗口第二
      * （建第一条函数就要），采样的权重最大（它是这个 App 的主体）。
      * 每一步都用 `runCatching` 兜住 —— 预编译失败不该让 App 起不来。
+     *
+     * ## 2026-10-27：为什么又加回来一大截（用户报"进软件卡了很多"）
+     *
+     * 用户原话："现在刚进软件还是卡，你去看看之前预编译预编译了什么，做出调整。
+     * 现在预编译时间比之前短了很多，进软件也卡了很多。"
+     *
+     * 上一轮为了"预编译更快"把几处预热删薄了，但被删掉的恰好是**首屏立刻要用**
+     * 的三条路径 —— 结果时间省在预编译、代价全落到进主界面的前几帧：
+     *   1. 曲线采样原来只热 `Quality.FAST`，而 [GraphState.quality] 静止时是
+     *      **`Quality.NORMAL`**（手势中才降到 FAST）→ 首屏那条循环从没被 JIT 编译过；
+     *   2. **特征点 / 吸附**（[FeatureFinder]、[intersections]、[nearestOnCurve]）
+     *      没预热过 —— 进界面点一下画布、或者教程第 1 步描点就会卡一下；
+     *   3. **LaTeX 翻译层**（[com.functiondrawer.watch.engine.Latex]）没预热过 ——
+     *      编辑器里第一次写 `\frac` / `\sqrt[n]{}` 要多花一帧。
+     * 现在三条都补回来，并按"首屏优先"重新分配权重。
      */
     private val STEPS: List<Step> = listOf(
-        Step("准备配色与主题", 0.06f) {
+        Step("准备配色与主题", 0.05f) {
             // 触发两个调色板 object 的静态初始化（日夜两套都摸一遍）
             KeyPalette.text
             KeyPalette.accent
             CurvePalette.size
         },
-        Step("载入数学字体", 0.18f) { context ->
+        Step("载入数学字体", 0.16f) { context ->
             // `Typeface.createFromAsset` 是解析 ttf，冷启动最贵的一件小事
             MathFontCache.get(context)
         },
-        Step("预热表达式引擎", 0.20f) {
+        Step("预热表达式引擎", 0.18f) {
             // 走一遍词法 → 建树 → 求值：覆盖函数调用、可绑定参数、希腊字母、根号
             val e1 = com.functiondrawer.watch.engine.Expression.compile("sin(x)+x^2/3")
             e1.eval(0.5)
@@ -124,6 +139,13 @@ internal object Precompile {
                  variables = listOf("θ", "t")
             )
             e3.eval(0.3)
+            // LaTeX 翻译层（本轮新增）：`\frac` / `\sqrt[n]{}` / `^{}` / `\pi`
+            // 都要在第一次按键之前先跑一遍，把翻译 + 词法那条路径热起来。
+            val e4 = com.functiondrawer.watch.engine.Expression.compile(
+                "\\frac{1}{2}+\\sqrt[3]{x}+x^{2}+\\pi",
+                variables = listOf("x")
+            )
+            e4.eval(1.0)
         },
         Step("预热曲线采样", 0.22f) {
             // 四种模式各来一条：显函数逐列采样、极坐标、参数方程、隐函数 marching squares
@@ -140,9 +162,40 @@ internal object Precompile {
                 ),
                 PlotFunction(id = 4L, mode = PlotMode.IMPLICIT, src1 = "x^2+y^2=1")
             )
+            // ⚠️ 两档精度都要跑：首屏静止时是 NORMAL，手势中才降到 FAST
+            // （见 GraphState.quality）。只热 FAST 的话，进界面的第一张图
+            // 仍然要走一遍"从没执行过"的采样循环。
+            Plotter.plot(functions, viewport, Quality.NORMAL)
             Plotter.plot(functions, viewport, Quality.FAST)
         },
-        Step("预热数学排版", 0.12f) { context ->
+        Step("预热特征点与吸附", 0.10f) {
+            // 进界面后点一下画布 / 教程描点，走的就是这几条：
+            //   FeatureFinder（零点、极值）→ nearestOnCurve（吸附到曲线）
+            //   → intersections（交点）。全都没预热过的话第一次点会卡一帧。
+            val vp = Viewport(widthPx = 360f, heightPx = 360f, unitsPerPixel = 1.0 / 40.0)
+            val expr = com.functiondrawer.watch.engine.Expression.compile("sin(x)+x^2/3")
+            com.functiondrawer.watch.engine.FeatureFinder.analyze(expr, -6.0, 6.0, limit = 4)
+            val plotted = Plotter.plot(
+                listOf(
+                    PlotFunction(id = 1L, mode = PlotMode.EXPLICIT, src1 = "sin(x)+x^2/3"),
+                    PlotFunction(id = 2L, mode = PlotMode.EXPLICIT, src1 = "cos(x)")
+                ),
+                vp,
+                Quality.FAST
+            )
+            val a = plotted.curves.firstOrNull()
+            val b = plotted.curves.getOrNull(1)
+            if (a != null) {
+                com.functiondrawer.watch.engine.nearestOnCurve(a, 180f, 180f, vp)
+                if (b != null) com.functiondrawer.watch.engine.intersections(a, b, vp)
+                com.functiondrawer.watch.engine.intersections(
+                    a,
+                    GLine(GPoint(-3.0, -3.0), GPoint(3.0, 3.0)),
+                    vp
+                )
+            }
+        },
+        Step("预热数学排版", 0.11f) { context ->
             // 让 MathRender 的解析 / 布局 / Canvas 字形测量都跑一遍
             val fonts = MathFontCache.get(context)
             for (src in listOf(
@@ -164,7 +217,7 @@ internal object Precompile {
             // 键帽图标那一版（虚线框）：单独跑一次，DASHED 分支也进 JIT
             layoutMath("root(x,)", 14f, 80f, fonts, SlotStyle.DASHED)
         },
-        Step("预热精度计算", 0.10f) {
+        Step("预热精度计算", 0.08f) {
             // BigDecimal 三条路径（format / formatTick / snap）三档精度都走一遍
             val saved = Calc.precision
             for (p in CalcPrecision.entries) {
@@ -176,7 +229,7 @@ internal object Precompile {
             }
             Calc.precision = saved
         },
-        Step("预热工具代数", 0.08f) {
+        Step("预热工具代数", 0.06f) {
             // 圆 / 圆锥曲线那两栏的代数（高斯消元、五点定圆锥曲线是这里最重的）
             val o = GPoint(0.0, 0.0)
             val p1 = GPoint(-1.0, 0.0)

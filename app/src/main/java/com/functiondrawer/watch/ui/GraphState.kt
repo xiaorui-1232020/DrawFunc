@@ -1534,10 +1534,24 @@ class GraphState {
         sliders.firstOrNull { it.id == id }?.let { updateSlider(it.copy(value = it.snap(value))) }
     }
 
+    /**
+     * 滑动条播放的**会话号**：每按下一次 ▶ 就 +1。
+     *
+     * 图像界面那段播放循环拿它当 `LaunchedEffect` 的 key ——
+     * 见 [toggleSliderPlaying] 里的说明（用户报的"滑动条只能播放一次"）。
+     */
+    var sliderPlayToken by mutableStateOf(0)
+        private set
+
     /** 播放键：同一时刻只播放一条（再点别的先把上一条停掉）。 */
     fun toggleSliderPlaying(id: Long) {
         val target = sliders.firstOrNull { it.id == id } ?: return
         val willPlay = !target.playing
+        // 每按一次 ▶ 就把会话号 +1：图像界面那一段播放循环用它当 key。
+        // 不能只靠 `playing` 这个布尔量 —— 同一个 id 在"停 → 再播"时，
+        // 循环协程可能还没来得及被取消完就以同一个 `(id, true)` 重启了，
+        // 表现就是用户报的"滑动条只能播放一次"（第二次按下什么都没发生）。
+        if (willPlay) sliderPlayToken++
         // 第一次按下播放键：弹一次「回到函数图像界面才开始播放」的提示。
         // 判据用 `AppPrefs.sliderPlayHintShown`（装一次只弹一次），而不是
         // 存档里的设置 —— 它是纯 UI 提示，不属于某份函数文件。
