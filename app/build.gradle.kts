@@ -32,16 +32,13 @@ android {
         // （API 24）—— 国产原屏表里跑 7.x/8.x 的机型不少。
         //
         // 降下来会牵出"只有高版本才有"的 API，逐个都做了处理（改这一行时一起查过一遍）：
-        //   * `View.setSystemGestureExclusionRects`（API 29）→ GraphScreen 里判版本，
-        //     低版本不做（这个能力 7.x 上没有等价替代），设置页那一行也会拦下并提示；
         //   * `MotionEvent.AXIS_SCROLL`（API 26）→ MainActivity 里 26 以下不列这个轴；
         //   * 沉浸式全屏本来就用的是 AndroidX 的 `WindowCompat`/`WindowInsetsControllerCompat`
         //     （兼容封装，API 30 以下自动退化成 `systemUiVisibility`），**没有**直接调
         //     平台那个 API 30 的 `setDecorFitsSystemWindows`；
-        //   * `LocalConfiguration.isScreenRound`（API 23）、`Bitmap.compress`、
-        //     `getExternalFilesDir`、`Uri.encode/decode`、`String.format` 等都在 24 以下就有。
+        //   * 相册导出用的 MediaStore 相对路径是 Android 10（API 29）才有的，
+        //     `savePngToGallery` 在低版本直接返回 false，退回应用私有目录。
         // lint 的 `abortOnError = false` 保持不变（低版本分支只靠上面的显式守卫，不靠 lint）。
-        // 注意：改动后**尚未**跑 Gradle 构建验证（构建要联网、且会写工作区外目录）。
         minSdk = 24
         targetSdk = 34
         // ---- 版本号（用户定的规则，2026-10-04）----
@@ -111,8 +108,8 @@ android {
 
     buildTypes {
         release {
-            // R8 对 Compose 是安全的（不需要额外 keep 规则），
-            // 能把 release 包从 ~19MB 压到 1.58MB —— 手表存储紧张，这很重要。
+            // R8 + 资源压缩压的主要是 dex 与资源，.so 不受影响；
+            // 手表存储紧张，现状体积见 README 的「当前状态」一节。
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
