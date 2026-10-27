@@ -17,6 +17,7 @@
 #include "../engine/fd_features.h"
 #include "../engine/plot.h"
 #include "../engine/viewport.h"
+#include "../src/platform.h"
 #include "../src/subst.h"
 #include "geo.h"
 #include "model.h"
@@ -1710,26 +1711,49 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap)
         }
     }
 
-    const char *dir = model_files_dir();
-    if (!dir || dir[0] == '\0') {
-        free(rgba);
+    char name[64];
+    sanitize(title, name, sizeof(name));
+
+    /* 先编码到内存：相册（MediaStore）与私有目录两条路共用同一份 PNG。 */
+    unsigned char *png = NULL;
+    size_t png_len = 0;
+    unsigned err = lodepng_encode32(&png, &png_len, rgba, (unsigned)g_w, (unsigned)g_h);
+    free(rgba);
+    if (err != 0 || !png) {
+        free(png);
         return false;
     }
 
-    char name[64];
-    sanitize(title, name, sizeof(name));
+    /* 1) 系统相册：Pictures/DrawFunc（Android 10+，MediaStore，免权限） */
+    if (platform_save_png(name, png, png_len)) {
+        free(png);
+        snprintf(out_path, cap, "Pictures/DrawFunc/%s", name);
+        return true;
+    }
+
+    /* 2) 退回应用私有目录 archives/ */
+    const char *dir = model_files_dir();
+    if (!dir || dir[0] == '\0') {
+        free(png);
+        return false;
+    }
+
+    char fs_path[768];
+    snprintf(fs_path, sizeof(fs_path), "%s/archives/%s", dir, name);
 
     char path[800];
     snprintf(path, sizeof(path), "%s/archives", dir);
     mkdir(path, 0700); /* 已存在会返回 -1，忽略即可 */
 
-    /* lodepng 走 LVGL 的 stdio 文件系统驱动，盘符是 'A'。 */
-    char fs_path[768];
-    snprintf(fs_path, sizeof(fs_path), "%s/archives/%s", dir, name);
-    snprintf(path, sizeof(path), "A:%s", fs_path);
-    unsigned err = lodepng_encode32_file(path, rgba, (unsigned)g_w, (unsigned)g_h);
-    free(rgba);
-    if (err != 0) return false;
+    FILE *f = fopen(fs_path, "wb");
+    if (!f) {
+        free(png);
+        return false;
+    }
+    size_t wrote = fwrite(png, 1, png_len, f);
+    fclose(f);
+    free(png);
+    if (wrote != png_len) return false;
 
     snprintf(out_path, cap, "%s", fs_path);
     return true;
