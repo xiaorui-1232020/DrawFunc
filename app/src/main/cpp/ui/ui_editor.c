@@ -468,6 +468,9 @@ static lv_obj_t *make_ta(lv_obj_t *parent, const char *text, const char *hint)
     lv_obj_set_style_pad_ver(ta, UI_PX(8), 0);
     lv_obj_set_style_border_width(ta, 0, 0);
     lv_obj_set_style_text_color(ta, lv_color_hex(FD_C_TEXT), 0);
+    /* 占位提示用浅灰，和真正输入的文字区分开。 */
+    lv_obj_set_style_text_color(ta, lv_color_hex(FD_C_DIM),
+                                LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_text_font(ta, ui_font_title(), 0);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, 240);
@@ -560,8 +563,8 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     /* 输入框 */
     g_ta1 = make_ta(root, c->fn.src1,
                     model()->settings.complex_plane
-                            ? "例如 2+3i"
-                            : (c->fn.mode == FD_PLOT_EXPLICIT ? "例如 sin(x)" : "表达式"));
+                            ? "例如：2+3i"
+                            : (c->fn.mode == FD_PLOT_EXPLICIT ? "例如：sin(x)" : "表达式"));
     g_ta2 = NULL;
     g_ta2_row = NULL;
     if (c->fn.mode == FD_PLOT_PARAMETRIC && !model()->settings.complex_plane) {
@@ -579,7 +582,7 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
         lv_obj_set_style_text_font(tag, ui_font_body(), 0);
         lv_obj_set_style_text_color(tag, lv_color_hex(FD_C_DIM), 0);
 
-        g_ta2 = make_ta(row, c->fn.src2, "例如 sin(t)");
+        g_ta2 = make_ta(row, c->fn.src2, "例如：sin(t)");
         lv_obj_set_width(g_ta2, UI_PX(320));
     }
 
