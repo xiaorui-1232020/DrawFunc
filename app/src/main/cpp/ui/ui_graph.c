@@ -10,10 +10,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
+#include "../engine/cmath.h"
+#include "../engine/fd_features.h"
 #include "../engine/plot.h"
 #include "../engine/viewport.h"
+#include "../src/platform.h"
+#include "../src/subst.h"
 #include "geo.h"
 #include "model.h"
 
@@ -40,6 +45,20 @@ static lv_obj_t *g_card_dot;
 static lv_obj_t *g_card_name;
 static lv_obj_t *g_card_expr;
 static lv_obj_t *g_card_err;
+static lv_obj_t *g_card_roots;
+static lv_obj_t *g_card_ext;
+static lv_obj_t *g_card_point;
+static lv_coord_t g_card_h = 52;
+
+/* 点击曲线后记住那个点的世界坐标（卡片里显示「点：(x, y)」）。 */
+static int g_tap_id;
+static bool g_tap_valid;
+static double g_tap_wx, g_tap_wy;
+
+/* 底部「− 滑动条 ＋」缩放栏（设置里打开才创建）。 */
+static lv_obj_t *g_zoom_bar;
+static lv_obj_t *g_zoom_slider;
+static float g_zoom_depth; /**< 滑轨当前相对位移，-1..1 */
 
 static uint32_t *g_px;
 static int g_stride_px;
@@ -261,7 +280,15 @@ static void rebuild_plot(void)
     fd_function fns[FD_MAX_CURVES];
     int n = 0;
     for (int i = 0; i < d->curve_count && n < FD_MAX_CURVES; i++) {
-        fns[n++] = d->curves[i].fn;
+        fns[n] = d->curves[i].fn;
+        /* x(A)/y(A) 与标量名在送进引擎前换成数值字面量（原文本不变）。 */
+        char sub1[FD_SRC_CAP];
+        char sub2[FD_SRC_CAP];
+        fd_subst_geo(fns[n].src1, sub1, sizeof(sub1));
+        fd_subst_geo(fns[n].src2, sub2, sizeof(sub2));
+        snprintf(fns[n].src1, sizeof(fns[n].src1), "%s", sub1);
+        snprintf(fns[n].src2, sizeof(fns[n].src2), "%s", sub2);
+        n++;
     }
 
     double params[4];
@@ -303,7 +330,7 @@ static void add_number(lv_obj_t *parent, int x, int y, const char *text)
     if (!parent) return;
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(l, ui_font_small(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(FD_C_DIM), 0);
     lv_obj_set_pos(l, x, y);
 }
@@ -391,7 +418,7 @@ static void add_tag(int x, int y, const char *text, uint32_t color)
     if (!g_numbers) return;
     lv_obj_t *l = lv_label_create(g_numbers);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &font_cn_14, 0);
+    lv_obj_set_style_text_font(l, ui_font_small(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
     lv_obj_set_pos(l, x, y);
 }
@@ -492,15 +519,46 @@ static void draw_arc(float cx, float cy, float r, float a0, float a1,
     }
 }
 
+/** 实心圆（点用；Bresenham 太细，这里直接扫包围盒）。 */
+static void fill_circle(float cx, float cy, float r, uint32_t c)
+{
+    int x0 = (int)floorf(cx - r);
+    int x1 = (int)ceilf(cx + r);
+    int y0 = (int)floorf(cy - r);
+    int y1 = (int)ceilf(cy + r);
+    float r2 = r * r;
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            float dx = (float)x + 0.5f - cx;
+            float dy = (float)y + 0.5f - cy;
+            if (dx * dx + dy * dy <= r2) put(x, y, c);
+        }
+    }
+}
+
 static void draw_geo_point(const fd_geo *g)
 {
     float sx, sy;
     world_to_screen(g->p[0], &sx, &sy);
     int x = (int)lroundf(sx);
     int y = (int)lroundf(sy);
-    dot(x, y, 7, rgb(FD_C_ACCENT));
-    dot(x, y, 3, rgb(FD_C_BG));
+    fill_circle(sx, sy, 4.0f, rgb(FD_C_ACCENT));
     if (g->name[0]) add_tag(x + 6, y - 18, g->name, FD_C_TEXT);
+}
+
+/** 点击曲线后，在图上把那个点标出来（白圈 + 曲线色实心点）。 */
+static void draw_tap_marker(void)
+{
+    if (!g_tap_valid) return;
+    fd_curve *c = model_curve(g_tap_id);
+    if (!c) return;
+
+    float sx = fd_vp_to_screen_x(&model()->vp, g_tap_wx);
+    float sy = fd_vp_to_screen_y(&model()->vp, g_tap_wy);
+    float r = ui_scale();
+    fill_circle(sx, sy, 6.0f * r, rgb(FD_C_BG));
+    fill_circle(sx, sy, 5.0f * r, rgb(FD_C_TEXT));
+    fill_circle(sx, sy, 2.8f * r, rgb(model_color(c->fn.color_index)));
 }
 
 static void draw_geo_segment(const fd_geo *g)
@@ -639,12 +697,163 @@ static void draw_tool_preview(void)
 }
 
 
+static void set_feature_line(lv_obj_t *label, const char *text)
+{
+    if (!label) return;
+    if (text && text[0]) {
+        lv_label_set_text(label, text);
+        lv_obj_remove_flag(label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/**
+ * 信息卡的两行特征：零点、极值（没有极值时有 y 截距就显示截距）。
+ * 只对显函数算 —— 极坐标/参数/隐函数没有「零点」这个概念。
+ */
+static void update_features(const fd_curve *c)
+{
+    char roots_txt[96] = "";
+    char ext_txt[96] = "";
+    char point_txt[80] = "";
+
+    if (c && g_tap_valid && g_tap_id == c->fn.id) {
+        snprintf(point_txt, sizeof(point_txt), "点：(%.3g, %.3g)", g_tap_wx, g_tap_wy);
+    }
+
+    if (c && c->fn.mode == FD_PLOT_EXPLICIT) {
+        char body[FD_SRC_CAP];
+        fd_expr_strip_explicit_prefix(c->fn.src1, body, sizeof(body));
+        if (body[0]) {
+            char sub[FD_SRC_CAP];
+            fd_subst_geo(body, sub, sizeof(sub));
+
+            double params[4];
+            model_param_values(params);
+            fd_param ps[4];
+            static const char *names[4] = {"a", "b", "c", "d"};
+            for (int i = 0; i < 4; i++) {
+                ps[i].name = names[i];
+                ps[i].value = params[i];
+            }
+            bool deg = c->fn.degrees < 0 ? model()->settings.angle_degrees
+                                         : c->fn.degrees != 0;
+            const char *vars[1] = {"x"};
+            fd_expr_error err;
+            memset(&err, 0, sizeof(err));
+            fd_expr *e = fd_expr_compile(sub, vars, 1, deg, ps, 4, &err);
+            if (e) {
+                fd_features f;
+                memset(&f, 0, sizeof(f));
+                fd_features_analyze(e, fd_vp_world_left(&model()->vp),
+                                    fd_vp_world_right(&model()->vp), 3, &f);
+
+                if (f.root_count > 0) {
+                    int n = snprintf(roots_txt, sizeof(roots_txt), "零点：");
+                    for (int i = 0; i < f.root_count; i++) {
+                        int left = (int)sizeof(roots_txt) - n;
+                        if (left < 16) break;
+                        n += snprintf(roots_txt + n, (size_t)left, i ? " %.3g" : "%.3g",
+                                      f.roots[i]);
+                    }
+                }
+                if (f.extrema_count > 0) {
+                    int n = snprintf(ext_txt, sizeof(ext_txt), "极值：");
+                    for (int i = 0; i < f.extrema_count && i < 2; i++) {
+                        int left = (int)sizeof(ext_txt) - n;
+                        if (left < 24) break;
+                        n += snprintf(ext_txt + n, (size_t)left, i ? " (%.3g,%.3g)" : "(%.3g,%.3g)",
+                                      f.extrema[i].x, f.extrema[i].y);
+                    }
+                } else if (f.has_y_intercept) {
+                    snprintf(ext_txt, sizeof(ext_txt), "y 截距：%.3g", f.y_intercept);
+                }
+                fd_expr_free(e);
+            }
+        }
+    }
+
+    set_feature_line(g_card_point, point_txt);
+    set_feature_line(g_card_roots, roots_txt);
+    set_feature_line(g_card_ext, ext_txt);
+
+    lv_coord_t step = UI_PX(18);
+    lv_coord_t y = UI_PX(46);
+    if (point_txt[0] && g_card_point) {
+        lv_obj_set_pos(g_card_point, UI_PX(30), y);
+        y += step;
+    }
+    if (roots_txt[0] && g_card_roots) {
+        lv_obj_set_pos(g_card_roots, UI_PX(30), y);
+        y += step;
+    }
+    if (ext_txt[0] && g_card_ext) lv_obj_set_pos(g_card_ext, UI_PX(30), y);
+
+    int lines = (point_txt[0] ? 1 : 0) + (roots_txt[0] ? 1 : 0) +
+                (ext_txt[0] ? 1 : 0);
+    g_card_h = (lv_coord_t)(UI_PX(52) + lines * step);
+    if (g_card) lv_obj_set_height(g_card, g_card_h);
+}
+
+static bool cpx_eval_curve(const fd_curve *c, fd_complex *out, fd_expr_error *err)
+{
+    double params[4];
+    model_param_values(params);
+    fd_param ps[4];
+    static const char *names[4] = {"a", "b", "c", "d"};
+    for (int i = 0; i < 4; i++) {
+        ps[i].name = names[i];
+        ps[i].value = params[i];
+    }
+    fd_complex z = {0.0, 0.0};
+    return fd_cpx_eval_text(c->fn.src1, ps, 4, z, out, err);
+}
+
+/** 复平面：单位圆 + 每条曲线的求值点（点旁标「名字=结果」）。 */
+static void draw_complex(void)
+{
+    fd_doc *d = model();
+
+    double upp = d->vp.units_per_px;
+    if (upp > 0.0) {
+        float r = (float)(1.0 / upp);
+        if (r >= 3.0f && r <= 3000.0f) {
+            float cx = fd_vp_to_screen_x(&d->vp, 0.0);
+            float cy = fd_vp_to_screen_y(&d->vp, 0.0);
+            draw_arc(cx, cy, r, 0.0f, (float)(2.0 * M_PI), rgb(FD_C_GRID));
+        }
+    }
+
+    for (int i = 0; i < d->curve_count; i++) {
+        const fd_curve *c = &d->curves[i];
+        if (!c->fn.visible || c->fn.src1[0] == '\0') continue;
+
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) continue;
+        if (!isfinite(v.re) || !isfinite(v.im)) continue;
+
+        float sx = fd_vp_to_screen_x(&d->vp, v.re);
+        float sy = fd_vp_to_screen_y(&d->vp, v.im);
+        fill_circle(sx, sy, 4.5f, rgb(model_color(c->fn.color_index)));
+
+        char lbl[64];
+        char txt[96];
+        fd_cpx_label(v, lbl, sizeof(lbl));
+        snprintf(txt, sizeof(txt), "%s=%s", c->name, lbl);
+        add_tag((int)sx + 7, (int)sy - 18, txt, FD_C_TEXT);
+    }
+}
+
 static void update_card(void)
 {
     fd_curve *c = model_selected_curve();
     if (!g_card) return;
     if (!c) {
         lv_obj_add_flag(g_card, LV_OBJ_FLAG_HIDDEN);
+        g_card_h = 52;
         return;
     }
     lv_obj_remove_flag(g_card, LV_OBJ_FLAG_HIDDEN);
@@ -659,12 +868,42 @@ static void update_card(void)
     }
     lv_label_set_text(g_card_expr, buf);
 
+    if (model()->settings.complex_plane) {
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) {
+            lv_label_set_text(g_card_err, err.message[0] ? err.message : "表达式无效");
+            lv_obj_remove_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
+            set_feature_line(g_card_point, "");
+            set_feature_line(g_card_roots, "");
+            set_feature_line(g_card_ext, "");
+            g_card_h = 52;
+            lv_obj_set_height(g_card, g_card_h);
+            return;
+        }
+        lv_obj_add_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
+
+        char lbl[64];
+        char txt[96];
+        fd_cpx_label(v, lbl, sizeof(lbl));
+        snprintf(txt, sizeof(txt), "结果：%s", lbl);
+        set_feature_line(g_card_point, "");
+        set_feature_line(g_card_roots, txt);
+        set_feature_line(g_card_ext, "");
+        g_card_h = 70;
+        lv_obj_set_height(g_card, g_card_h);
+        return;
+    }
+
     if (g_plot.error_count > 0 && g_plot.error_msgs && g_plot.error_ids) {
         lv_label_set_text(g_card_err, g_plot.error_msgs[0]);
         lv_obj_remove_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
     }
+
+    update_features(c);
 }
 
 static void repaint(void)
@@ -675,11 +914,23 @@ static void repaint(void)
     fill_bg();
     if (g_numbers) lv_obj_clean(g_numbers);
 
+    if (d->settings.complex_plane) {
+        /* 复平面模式不跑实数采样：每条表达式按复数求值，结果画成一个点。 */
+        draw_grid_and_axes(&d->vp, &d->settings);
+        draw_complex();
+        draw_geo();
+        draw_tool_preview();
+        update_card();
+        if (g_canvas) lv_obj_invalidate(g_canvas);
+        return;
+    }
+
     rebuild_plot();
 
     draw_grid_and_axes(&d->vp, &d->settings);
     draw_curves();
     draw_geo();
+    draw_tap_marker();
     draw_tool_preview();
     update_card();
 
@@ -692,7 +943,8 @@ static void repaint(void)
 
 static int hit_test(float x, float y)
 {
-    const float limit = FD_GRAPH_HIT_PX * FD_GRAPH_HIT_PX;
+    float hp = FD_GRAPH_HIT_PX * ui_scale();
+    const float limit = hp * hp;
     float best = limit;
     int found = 0;
 
@@ -711,12 +963,138 @@ static int hit_test(float x, float y)
     return found;
 }
 
-/** 顶部按钮条 / 工具提示条 / 底部信息卡所占的区域不参与手势，避免误触。 */
+/* 点击处可能有多条曲线经过：按距离收集，供「再次点击切换」用。 */
+static int g_cycle_ids[FD_MAX_CURVES];
+static int g_cycle_n;
+static int g_cycle_idx;
+static float g_cycle_x, g_cycle_y;
+static uint32_t g_cycle_tick;
+
+static int collect_curve_ids(float sx, float sy, int *out, int cap)
+{
+    float best[FD_MAX_CURVES];
+    int n = 0;
+    const float lim = (FD_GRAPH_HIT_PX * ui_scale()) * (FD_GRAPH_HIT_PX * ui_scale());
+
+    for (int i = 0; i < g_plot.line_count; i++) {
+        const fd_polyline *pl = &g_plot.lines[i];
+        float bd = lim;
+        for (int k = 0; k < pl->count; k++) {
+            float dx = pl->xy[2 * k] - sx;
+            float dy = pl->xy[2 * k + 1] - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bd) bd = d2;
+        }
+        if (bd >= lim) continue;
+
+        int idx = -1;
+        for (int j = 0; j < n; j++) {
+            if (out[j] == pl->function_id) {
+                idx = j;
+                break;
+            }
+        }
+        if (idx >= 0) {
+            if (bd < best[idx]) best[idx] = bd;
+        } else if (n < cap) {
+            out[n] = pl->function_id;
+            best[n] = bd;
+            n++;
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (best[j] < best[i]) {
+                float td = best[i];
+                best[i] = best[j];
+                best[j] = td;
+                int ti = out[i];
+                out[i] = out[j];
+                out[j] = ti;
+            }
+        }
+    }
+    return n;
+}
+
+static int collect_complex_ids(float sx, float sy, int *out, int cap)
+{
+    fd_doc *d = model();
+    float best[FD_MAX_CURVES];
+    int n = 0;
+    const float lim = (FD_GRAPH_HIT_PX * ui_scale()) * (FD_GRAPH_HIT_PX * ui_scale());
+
+    for (int i = 0; i < d->curve_count && n < cap; i++) {
+        const fd_curve *c = &d->curves[i];
+        if (!c->fn.visible || c->fn.src1[0] == '\0') continue;
+
+        fd_expr_error err;
+        fd_complex v;
+        memset(&err, 0, sizeof(err));
+        if (!cpx_eval_curve(c, &v, &err)) continue;
+        if (!isfinite(v.re) || !isfinite(v.im)) continue;
+
+        float px = fd_vp_to_screen_x(&d->vp, v.re);
+        float py = fd_vp_to_screen_y(&d->vp, v.im);
+        float dx = px - sx;
+        float dy = py - sy;
+        float d2 = dx * dx + dy * dy;
+        if (d2 >= lim) continue;
+
+        out[n] = c->fn.id;
+        best[n] = d2;
+        n++;
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (best[j] < best[i]) {
+                float td = best[i];
+                best[i] = best[j];
+                best[j] = td;
+                int ti = out[i];
+                out[i] = out[j];
+                out[j] = ti;
+            }
+        }
+    }
+    return n;
+}
+
+/** 曲线折线上离点击位置最近的一个采样点（世界坐标）。 */
+static bool nearest_curve_point(int id, float sx, float sy, double *wx, double *wy)
+{
+    fd_doc *d = model();
+    float best = FD_GRAPH_HIT_PX * ui_scale();
+    best *= best;
+    bool found = false;
+
+    for (int i = 0; i < g_plot.line_count; i++) {
+        const fd_polyline *pl = &g_plot.lines[i];
+        if (pl->function_id != id) continue;
+        for (int k = 0; k < pl->count; k++) {
+            float dx = pl->xy[2 * k] - sx;
+            float dy = pl->xy[2 * k + 1] - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 < best) {
+                best = d2;
+                *wx = fd_vp_to_world_x(&d->vp, pl->xy[2 * k]);
+                *wy = fd_vp_to_world_y(&d->vp, pl->xy[2 * k + 1]);
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+
+/** 顶部按钮条 / 工具提示条 / 底部信息卡 + 缩放栏所占的区域不参与手势，避免误触。 */
 static bool in_ui_band(float y)
 {
-    if (y < 56.0f) return true;
-    if (g_tool != FD_TOOL_MOVE && y < 96.0f) return true;
-    if (g_card && y > (float)(g_h - 92)) return true;
+    if (y < (float)UI_PX(56)) return true;
+    if (g_tool != FD_TOOL_MOVE && y < (float)UI_PX(96)) return true;
+    if (g_card && y > (float)(g_h - UI_PX(16) - g_card_h)) return true;
+    if (g_zoom_bar && y > (float)(g_h - UI_PX(52))) return true;
     return false;
 }
 
@@ -1014,6 +1392,11 @@ static void tool_commit(void)
             break;
         }
         case FD_TOOL_ANGLE: {
+            /* 和旧版一致：三个点量角时，先按线段规则建出两条边（自动命名），
+             * 角度对象本身只保存顶点和两条边的方向。 */
+            add_line_geo(FD_GEO_SEGMENT, a->xy, b->xy);
+            add_line_geo(FD_GEO_SEGMENT, a->xy, c->xy);
+
             fd_geo *g = model_add_geo(FD_GEO_ANGLE);
             if (g) {
                 g->npts = 3;
@@ -1336,14 +1719,45 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
                         model_reset_view();
                         ui_toast("视图已复位");
                         g_last_tap_tick = 0;
+                        g_cycle_n = 0;
                         repaint();
                     } else {
                         g_last_tap_tick = now;
                         g_last_tap_x = g_down_x;
                         g_last_tap_y = g_down_y;
-                        int id = hit_test(g_down_x, g_down_y);
-                        if (id) {
+
+                        bool complex = model()->settings.complex_plane;
+                        bool same = g_cycle_n > 0 &&
+                                    fabsf(g_down_x - g_cycle_x) <= 24.0f &&
+                                    fabsf(g_down_y - g_cycle_y) <= 24.0f &&
+                                    (uint32_t)(now - g_cycle_tick) > FD_DOUBLE_TAP_MS &&
+                                    (uint32_t)(now - g_cycle_tick) <= 3000u;
+                        if (same) {
+                            /* 同一点再次点击：切换到下一条经过这里的曲线。 */
+                            g_cycle_idx = (g_cycle_idx + 1) % g_cycle_n;
+                        } else {
+                            g_cycle_n = complex
+                                                ? collect_complex_ids(g_down_x, g_down_y,
+                                                                      g_cycle_ids, FD_MAX_CURVES)
+                                                : collect_curve_ids(g_down_x, g_down_y,
+                                                                    g_cycle_ids, FD_MAX_CURVES);
+                            g_cycle_idx = 0;
+                            g_cycle_x = g_down_x;
+                            g_cycle_y = g_down_y;
+                        }
+                        g_cycle_tick = now;
+
+                        if (g_cycle_n > 0) {
+                            int id = g_cycle_ids[g_cycle_idx];
                             model_select(id);
+                            g_tap_id = id;
+                            g_tap_valid = !complex &&
+                                          nearest_curve_point(id, g_down_x, g_down_y,
+                                                              &g_tap_wx, &g_tap_wy);
+                            repaint();
+                        } else if (g_tap_valid) {
+                            g_tap_valid = false;
+                            g_tap_id = 0;
                             repaint();
                         }
                     }
@@ -1429,6 +1843,14 @@ void ui_graph_detach(void)
     g_card_name = NULL;
     g_card_expr = NULL;
     g_card_err = NULL;
+    g_card_roots = NULL;
+    g_card_ext = NULL;
+    g_card_point = NULL;
+    g_tap_valid = false;
+    g_tap_id = 0;
+    g_zoom_bar = NULL;
+    g_zoom_slider = NULL;
+    g_zoom_depth = 0.0f;
     g_hint = NULL;
     g_hint_label = NULL;
     g_panel = NULL;
@@ -1447,23 +1869,40 @@ void ui_graph_detach(void)
 
 static void sanitize(const char *title, char *out, size_t cap)
 {
+    char tmp[80];
     size_t n = 0;
+
     if (title) {
-        for (const char *p = title; *p && n + 1 < cap; p++) {
+        for (const char *p = title; *p && n + 1 < sizeof(tmp); p++) {
             unsigned char ch = (unsigned char)*p;
-            if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') ||
-                (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_') {
-                out[n++] = (char)ch;
-            } else if (ch >= 0x80) {
-                /* 中文标题：跳过，用时间戳兜底。 */
-                continue;
+            if (ch < 0x20 || ch == 0x7F) {
+                tmp[n++] = '_';
+            } else if (ch < 0x80 && strchr("\\/:*?\"<>|", (int)ch)) {
+                tmp[n++] = '_';
+            } else {
+                tmp[n++] = (char)ch; /* 中文等 UTF-8 字节原样保留 */
             }
         }
     }
-    if (n == 0) {
-        snprintf(out, cap, "graph");
+    tmp[n] = '\0';
+
+    char *s = tmp;
+    while (*s == ' ' || *s == '.' || *s == '_') s++;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '.' || e[-1] == '_')) *--e = '\0';
+
+    if (*s == '\0') {
+        snprintf(out, cap, "graph.png");
+        return;
+    }
+
+    if (strlen(s) > (cap > 5 ? cap - 5 : strlen(s))) s[cap - 5] = '\0';
+
+    size_t len = strlen(s);
+    if (len >= 4 && strcasecmp(s + len - 4, ".png") == 0) {
+        snprintf(out, cap, "%s", s);
     } else {
-        out[n] = '\0';
+        snprintf(out, cap, "%s.png", s);
     }
 }
 
@@ -1490,26 +1929,49 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap)
         }
     }
 
-    const char *dir = model_files_dir();
-    if (!dir || dir[0] == '\0') {
-        free(rgba);
+    char name[64];
+    sanitize(title, name, sizeof(name));
+
+    /* 先编码到内存：相册（MediaStore）与私有目录两条路共用同一份 PNG。 */
+    unsigned char *png = NULL;
+    size_t png_len = 0;
+    unsigned err = lodepng_encode32(&png, &png_len, rgba, (unsigned)g_w, (unsigned)g_h);
+    free(rgba);
+    if (err != 0 || !png) {
+        lv_free(png);
         return false;
     }
 
-    char name[64];
-    sanitize(title, name, sizeof(name));
+    /* 1) 系统相册：Pictures/DrawFunc（Android 10+，MediaStore，免权限） */
+    if (platform_save_png(name, png, png_len)) {
+        lv_free(png);
+        snprintf(out_path, cap, "Pictures/DrawFunc/%s", name);
+        return true;
+    }
+
+    /* 2) 退回应用私有目录 archives/ */
+    const char *dir = model_files_dir();
+    if (!dir || dir[0] == '\0') {
+        lv_free(png);
+        return false;
+    }
+
+    char fs_path[768];
+    snprintf(fs_path, sizeof(fs_path), "%s/archives/%s", dir, name);
 
     char path[800];
     snprintf(path, sizeof(path), "%s/archives", dir);
     mkdir(path, 0700); /* 已存在会返回 -1，忽略即可 */
 
-    /* lodepng 走 LVGL 的 stdio 文件系统驱动，盘符是 'A'。 */
-    char fs_path[768];
-    snprintf(fs_path, sizeof(fs_path), "%s/archives/%s.png", dir, name);
-    snprintf(path, sizeof(path), "A:%s", fs_path);
-    unsigned err = lodepng_encode32_file(path, rgba, (unsigned)g_w, (unsigned)g_h);
-    free(rgba);
-    if (err != 0) return false;
+    FILE *f = fopen(fs_path, "wb");
+    if (!f) {
+        lv_free(png);
+        return false;
+    }
+    size_t wrote = fwrite(png, 1, png_len, f);
+    fclose(f);
+    lv_free(png);
+    if (wrote != png_len) return false;
 
     snprintf(out_path, cap, "%s", fs_path);
     return true;
@@ -1552,8 +2014,8 @@ static lv_obj_t *add_chip(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
                           void *data)
 {
     lv_obj_t *b = ui_button(parent, text, NULL);
-    lv_obj_set_height(b, 32);
-    lv_obj_set_style_pad_hor(b, 11, 0);
+    lv_obj_set_height(b, UI_PX(32));
+    lv_obj_set_style_pad_hor(b, UI_PX(11), 0);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, data);
     return b;
 }
@@ -1621,24 +2083,24 @@ static void build_hint(lv_obj_t *parent)
     lv_obj_t *bar = lv_obj_create(parent);
     g_hint = bar;
     lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, LV_PCT(100), 36);
+    lv_obj_set_size(bar, LV_PCT(100), UI_PX(36));
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x1A222C), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_90, 0);
-    lv_obj_set_style_pad_hor(bar, 12, 0);
-    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_style_pad_hor(bar, UI_PX(12), 0);
+    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, UI_PX(56));
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
     g_hint_label = lv_label_create(bar);
     lv_label_set_text(g_hint_label, "");
     lv_obj_set_width(g_hint_label, LV_PCT(76));
     lv_label_set_long_mode(g_hint_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_font(g_hint_label, &font_cn_14, 0);
+    lv_obj_set_style_text_font(g_hint_label, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_hint_label, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(g_hint_label, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *exit = ui_button(bar, "退出", hint_exit_clicked);
-    lv_obj_set_height(exit, 28);
-    lv_obj_set_style_pad_hor(exit, 10, 0);
+    lv_obj_set_height(exit, UI_PX(28));
+    lv_obj_set_style_pad_hor(exit, UI_PX(10), 0);
     lv_obj_align(exit, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
@@ -1653,8 +2115,8 @@ static void build_tool_panel(lv_obj_t *parent)
     lv_obj_set_pos(p, 0, 0);
     lv_obj_set_style_bg_color(p, lv_color_hex(FD_C_BG), 0);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(p, 12, 0);
-    lv_obj_set_style_pad_row(p, 6, 0);
+    lv_obj_set_style_pad_all(p, UI_PX(12), 0);
+    lv_obj_set_style_pad_row(p, UI_PX(6), 0);
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(p, LV_DIR_VER);
     lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
@@ -1669,14 +2131,14 @@ static void build_tool_panel(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *title = ui_label(row, "工具", FD_C_TEXT);
-    lv_obj_set_style_text_font(title, &font_cn_20, 0);
+    lv_obj_set_style_text_font(title, ui_font_title(), 0);
 
     lv_obj_t *close = ui_button(row, "关闭", panel_close_clicked);
     lv_obj_set_height(close, 34);
 
     for (int s = 0; s < 5; s++) {
         lv_obj_t *sec = ui_label(p, k_section_names[s], FD_C_DIM);
-        lv_obj_set_style_text_font(sec, &font_cn_14, 0);
+        lv_obj_set_style_text_font(sec, ui_font_small(), 0);
         lv_obj_set_height(sec, 16);
 
         lv_obj_t *wrap = lv_obj_create(p);
@@ -1707,22 +2169,87 @@ static void build_toolbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, LV_SIZE_CONTENT, 40);
+    lv_obj_set_size(bar, LV_SIZE_CONTENT, UI_PX(40));
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(bar, 8, 0);
-    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_pad_column(bar, UI_PX(8), 0);
+    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, UI_PX(10));
 
     lv_obj_t *list = ui_button(bar, "列表", list_clicked);
-    lv_obj_set_height(list, 34);
+    lv_obj_set_height(list, UI_PX(34));
     lv_obj_t *add = ui_button(bar, "新建", add_clicked);
-    lv_obj_set_height(add, 34);
+    lv_obj_set_height(add, UI_PX(34));
     lv_obj_t *tools = ui_button(bar, "工具", NULL);
-    lv_obj_set_height(tools, 34);
+    lv_obj_set_height(tools, UI_PX(34));
     lv_obj_add_event_cb(tools, tools_clicked, LV_EVENT_CLICKED, NULL);
+}
+
+static void zoom_apply(double factor)
+{
+    if (g_w <= 0 || g_h <= 0) return;
+    model_zoom(factor, g_w / 2.0, g_h / 2.0);
+    repaint();
+}
+
+/** 按键：固定一大步（1.5 倍），按完滑轨回中点。 */
+static void zoom_step_clicked(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    int dir = (int)(intptr_t)lv_obj_get_user_data(btn);
+    g_zoom_depth = 0.0f;
+    if (g_zoom_slider) lv_slider_set_value(g_zoom_slider, 50, LV_ANIM_OFF);
+    zoom_apply(dir > 0 ? 1.5 : 1.0 / 1.5);
+}
+
+/** 滑轨：相对量，只表示「相对上次位置的偏移」，最多一步 ±1.5 倍。 */
+static void zoom_slider_changed(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    float depth = ((float)lv_slider_get_value(sl) - 50.0f) / 50.0f;
+    double factor = pow(1.5, (double)(depth - g_zoom_depth));
+    g_zoom_depth = depth;
+    if (fabs(factor - 1.0) > 1e-9) zoom_apply(factor);
+}
+
+static void build_zoom_bar(lv_obj_t *parent)
+{
+    if (!model()->settings.show_zoom_bar) return;
+
+    lv_obj_t *bar = lv_obj_create(parent);
+    g_zoom_bar = bar;
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, UI_PX(300), UI_PX(44));
+    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -UI_PX(4));
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bar, UI_PX(8), 0);
+
+    lv_obj_t *minus = ui_button(bar, "−", zoom_step_clicked);
+    lv_obj_set_size(minus, UI_PX(44), UI_PX(36));
+    lv_obj_set_user_data(minus, (void *)(intptr_t)-1);
+
+    lv_obj_t *sl = lv_slider_create(bar);
+    g_zoom_slider = sl;
+    lv_obj_set_size(sl, UI_PX(170), UI_PX(8));
+    lv_slider_set_range(sl, 0, 100);
+    lv_slider_set_value(sl, 50, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(sl, lv_color_hex(0x2A3542), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sl, lv_color_hex(FD_C_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(sl, UI_PX(6), LV_PART_KNOB);
+    lv_obj_add_event_cb(sl, zoom_slider_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *plus = ui_button(bar, "+", zoom_step_clicked);
+    lv_obj_set_size(plus, UI_PX(44), UI_PX(36));
+    lv_obj_set_user_data(plus, (void *)(intptr_t)1);
+
+    g_zoom_depth = 0.0f;
 }
 
 static void build_card(lv_obj_t *parent)
@@ -1730,44 +2257,68 @@ static void build_card(lv_obj_t *parent)
     lv_obj_t *card = lv_obj_create(parent);
     g_card = card;
     lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, 244, 52);
+    lv_obj_set_size(card, UI_PX(244), UI_PX(52));
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1A222C), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_90, 0);
-    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_radius(card, UI_PX(16), 0);
     lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0, -16);
+    /* 打开缩放栏时信息卡上移，给底部那一栏让位。 */
+    lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0,
+                 model()->settings.show_zoom_bar ? -UI_PX(62) : -UI_PX(16));
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     ui_set_click(card, card_clicked);
 
     g_card_dot = lv_obj_create(card);
     lv_obj_remove_style_all(g_card_dot);
-    lv_obj_set_size(g_card_dot, 12, 12);
+    lv_obj_set_size(g_card_dot, UI_PX(12), UI_PX(12));
     lv_obj_set_style_radius(g_card_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_card_dot, lv_color_hex(FD_C_ACCENT), 0);
     lv_obj_set_style_bg_opa(g_card_dot, LV_OPA_COVER, 0);
-    lv_obj_align(g_card_dot, LV_ALIGN_LEFT_MID, 12, -6);
+    lv_obj_align(g_card_dot, LV_ALIGN_LEFT_MID, UI_PX(12), -UI_PX(6));
 
     g_card_name = lv_label_create(card);
     lv_label_set_text(g_card_name, "a(x)");
-    lv_obj_set_style_text_font(g_card_name, &font_cn_16, 0);
+    lv_obj_set_style_text_font(g_card_name, ui_font_body(), 0);
     lv_obj_set_style_text_color(g_card_name, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_align(g_card_name, LV_ALIGN_TOP_LEFT, 30, 6);
+    lv_obj_align(g_card_name, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(6));
 
     g_card_expr = lv_label_create(card);
     lv_label_set_text(g_card_expr, "sin(x)");
     lv_label_set_long_mode(g_card_expr, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(g_card_expr, 198);
-    lv_obj_set_style_text_font(g_card_expr, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(g_card_expr, UI_PX(198));
+    lv_obj_set_style_text_font(g_card_expr, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_card_expr, lv_color_hex(FD_C_DIM), 0);
-    lv_obj_align(g_card_expr, LV_ALIGN_TOP_LEFT, 30, 28);
+    lv_obj_align(g_card_expr, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(28));
 
     g_card_err = lv_label_create(card);
     lv_label_set_text(g_card_err, "");
     lv_obj_add_flag(g_card_err, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(g_card_err, &font_cn_16, 0);
+    lv_obj_set_style_text_font(g_card_err, ui_font_body(), 0);
     lv_obj_set_style_text_color(g_card_err, lv_color_hex(FD_C_DANGER), 0);
-    lv_obj_align(g_card_err, LV_ALIGN_TOP_LEFT, 30, 28);
+    lv_obj_align(g_card_err, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(28));
+
+    /* 零点 / 极值两行，有内容才显示（卡片高度随之变化）。 */
+    g_card_point = lv_label_create(card);
+    lv_label_set_text(g_card_point, "");
+    lv_obj_add_flag(g_card_point, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(g_card_point, ui_font_small(), 0);
+    lv_obj_set_style_text_color(g_card_point, lv_color_hex(FD_C_ACCENT), 0);
+    lv_obj_align(g_card_point, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(46));
+
+    g_card_roots = lv_label_create(card);
+    lv_label_set_text(g_card_roots, "");
+    lv_obj_add_flag(g_card_roots, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(g_card_roots, ui_font_small(), 0);
+    lv_obj_set_style_text_color(g_card_roots, lv_color_hex(FD_C_TEXT), 0);
+    lv_obj_align(g_card_roots, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(46));
+
+    g_card_ext = lv_label_create(card);
+    lv_label_set_text(g_card_ext, "");
+    lv_obj_add_flag(g_card_ext, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(g_card_ext, ui_font_small(), 0);
+    lv_obj_set_style_text_color(g_card_ext, lv_color_hex(FD_C_DIM), 0);
+    lv_obj_align(g_card_ext, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(64));
 }
 
 static void ensure_buffer(int w, int h)
@@ -1825,6 +2376,7 @@ lv_obj_t *ui_graph_create(lv_obj_t *parent)
     lv_obj_remove_flag(g_numbers, LV_OBJ_FLAG_CLICKABLE);
 
     build_toolbar(g_root);
+    build_zoom_bar(g_root);
     build_card(g_root);
     build_hint(g_root);
     /* 工具面板是全屏浮层，最后建才能盖在其它控件之上。 */

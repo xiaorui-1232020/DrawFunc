@@ -111,19 +111,19 @@ static lv_obj_t *chip(lv_obj_t *parent, const char *text, bool on,
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, LV_SIZE_CONTENT, 34);
-    lv_obj_set_style_min_width(b, 46, 0);
-    lv_obj_set_style_pad_hor(b, 10, 0);
+    lv_obj_set_size(b, LV_SIZE_CONTENT, UI_PX(34));
+    lv_obj_set_style_min_width(b, UI_PX(46), 0);
+    lv_obj_set_style_pad_hor(b, UI_PX(10), 0);
     lv_obj_set_style_bg_color(b, lv_color_hex(on ? 0x1B3B48 : FD_C_PANEL2), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(b, 11, 0);
+    lv_obj_set_style_radius(b, UI_PX(11), 0);
     lv_obj_set_style_border_width(b, 0, 0);
     lv_obj_set_user_data(b, (void *)(intptr_t)data);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &font_cn_16, 0);
+    lv_obj_set_style_text_font(l, ui_font_body(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(on ? FD_C_ACCENT : FD_C_DIM), 0);
     lv_obj_center(l);
     return b;
@@ -146,7 +146,7 @@ lv_obj_t *ui_props_create(lv_obj_t *parent)
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(root, 12, 0);
+    lv_obj_set_style_pad_all(root, UI_PX(12), 0);
     lv_obj_set_scroll_dir(root, LV_DIR_VER);
     lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
@@ -160,7 +160,7 @@ lv_obj_t *ui_props_create(lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(head);
     lv_label_set_text(title, c->name);
-    lv_obj_set_style_text_font(title, &font_cn_16, 0);
+    lv_obj_set_style_text_font(title, ui_font_body(), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -201,7 +201,7 @@ lv_obj_t *ui_props_create(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_t *wl = lv_label_create(wrow);
     lv_label_set_text(wl, "线宽");
-    lv_obj_set_style_text_font(wl, &font_cn_16, 0);
+    lv_obj_set_style_text_font(wl, ui_font_body(), 0);
     lv_obj_set_style_text_color(wl, lv_color_hex(FD_C_DIM), 0);
 
     lv_obj_t *wchips = lv_obj_create(wrow);
@@ -226,7 +226,7 @@ lv_obj_t *ui_props_create(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_t *dl = lv_label_create(drow);
     lv_label_set_text(dl, "线型");
-    lv_obj_set_style_text_font(dl, &font_cn_16, 0);
+    lv_obj_set_style_text_font(dl, ui_font_body(), 0);
     lv_obj_set_style_text_color(dl, lv_color_hex(FD_C_DIM), 0);
 
     lv_obj_t *dchips = lv_obj_create(drow);
@@ -249,7 +249,7 @@ lv_obj_t *ui_props_create(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_t *al = lv_label_create(arow);
     lv_label_set_text(al, "角度");
-    lv_obj_set_style_text_font(al, &font_cn_16, 0);
+    lv_obj_set_style_text_font(al, ui_font_body(), 0);
     lv_obj_set_style_text_color(al, lv_color_hex(FD_C_DIM), 0);
 
     lv_obj_t *achips = lv_obj_create(arow);

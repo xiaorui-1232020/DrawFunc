@@ -1,9 +1,11 @@
 package com.functiondrawer.watch
 
 import android.app.Activity
+import android.content.ContentValues
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -41,6 +43,39 @@ class MainActivity : Activity() {
         surfaceView.requestFocus()
 
         nativeSetFilesDir(filesDir.absolutePath)
+        // 相册导出（MediaStore）需要 Activity 的 ContentResolver。
+        nativeSetActivity(this)
+    }
+
+    /**
+     * 原生层导出 PNG 时调用：写进系统相册 `Pictures/DrawFunc`。
+     *
+     * Android 10 起走 MediaStore，**不需要任何权限**；插入时 IS_PENDING=1，
+     * 写完再置 0，避免文件管理器看到写了一半的图。
+     * 返回 false 时原生层会退回应用私有目录。
+     */
+    fun savePngToGallery(bytes: ByteArray, name: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        return try {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DrawFunc")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+            ) ?: return false
+            val out = contentResolver.openOutputStream(uri) ?: return false
+            out.use { it.write(bytes) }
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "savePngToGallery 失败: ${t.message}")
+            false
+        }
     }
 
     override fun onBackPressed() {
@@ -69,6 +104,7 @@ class MainActivity : Activity() {
 
     /** 原生层入口，实现在 cpp/src/platform_android.c。 */
     private external fun nativeSetFilesDir(dir: String)
+    private external fun nativeSetActivity(activity: MainActivity)
     private external fun nativeSurfaceCreated(surface: Surface)
     private external fun nativeSurfaceChanged(width: Int, height: Int)
     private external fun nativeSurfaceDestroyed()

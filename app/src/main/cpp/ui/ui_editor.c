@@ -9,9 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cmath.h"
 #include "expr.h"
 #include "model.h"
 #include "plot.h"
+#include "subst.h"
 
 #define FD_EDITOR_COLS 5
 #define FD_ALPHA_COLS 6
@@ -91,6 +93,32 @@ static const key_def *page_keys(int page)
 static bool validate_text(const char *src, fd_plot_mode mode, bool degrees,
                           char *msg, size_t cap)
 {
+    /* 先做几何量替换：x(A)/y(A) 和距离/角/面积对象名换成数值字面量。 */
+    char subst[FD_SRC_CAP];
+    fd_subst_geo(src, subst, sizeof(subst));
+    src = subst;
+
+    /* 复平面模式：按复数表达式校验。 */
+    if (model()->settings.complex_plane) {
+        double values[4];
+        model_param_values(values);
+        fd_param ps[4];
+        static const char *pnames[4] = {"a", "b", "c", "d"};
+        for (int i = 0; i < 4; i++) {
+            ps[i].name = pnames[i];
+            ps[i].value = values[i];
+        }
+        fd_expr_error cerr;
+        memset(&cerr, 0, sizeof(cerr));
+        fd_cpx_node *ce = fd_cpx_compile(src, ps, 4, &cerr);
+        if (!ce) {
+            snprintf(msg, cap, "%s", cerr.message[0] ? cerr.message : "表达式无效");
+            return false;
+        }
+        fd_cpx_free(ce);
+        return true;
+    }
+
     double params[4];
     model_param_values(params);
     fd_param ps[4];
@@ -228,34 +256,34 @@ static void build_keypad(void)
     bool alpha = (g_page == 3);
     int cols = alpha ? FD_ALPHA_COLS : FD_EDITOR_COLS;
     int rows = alpha ? FD_ALPHA_ROWS : 4;
-    int key_h = alpha ? 32 : 38;
+    int key_h = alpha ? UI_PX(32) : UI_PX(38);
     const key_def *keys = page_keys(g_page);
 
-    lv_obj_set_size(g_grid, cols * 62 + (cols - 1) * 5,
-                    rows * key_h + (rows - 1) * 5);
+    lv_obj_set_size(g_grid, cols * UI_PX(62) + (cols - 1) * UI_PX(5),
+                    rows * key_h + (rows - 1) * UI_PX(5));
     lv_obj_set_flex_flow(g_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(g_grid, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(g_grid, 5, 0);
-    lv_obj_set_style_pad_column(g_grid, 5, 0);
+    lv_obj_set_style_pad_row(g_grid, UI_PX(5), 0);
+    lv_obj_set_style_pad_column(g_grid, UI_PX(5), 0);
 
     for (int i = 0; i < cols * rows; i++) {
         const char *label = alpha ? alpha_label(i) : keys[i].label;
         lv_obj_t *b = lv_button_create(g_grid);
         lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, 62, key_h);
+        lv_obj_set_size(b, UI_PX(62), key_h);
         /* 空格子只占位，保证每排对齐（字母页 x y z 那排只有 3 个）。 */
         if (!label[0]) continue;
         lv_obj_set_style_bg_color(b, lv_color_hex(FD_C_PANEL2), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 10, 0);
+        lv_obj_set_style_radius(b, UI_PX(10), 0);
         lv_obj_set_style_border_width(b, 0, 0);
         lv_obj_set_user_data(b, (void *)label);
         lv_obj_add_event_cb(b, key_clicked, LV_EVENT_CLICKED, NULL);
 
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, label);
-        lv_obj_set_style_text_font(l, &font_cn_16, 0);
+        lv_obj_set_style_text_font(l, ui_font_body(), 0);
         lv_obj_set_style_text_color(l, lv_color_hex(FD_C_TEXT), 0);
         lv_obj_center(l);
 
@@ -432,15 +460,15 @@ static lv_obj_t *make_ta(lv_obj_t *parent, const char *text, const char *hint)
 {
     lv_obj_t *ta = lv_textarea_create(parent);
     lv_obj_remove_style_all(ta);
-    lv_obj_set_size(ta, LV_PCT(100), 40);
+    lv_obj_set_size(ta, LV_PCT(100), UI_PX(40));
     lv_obj_set_style_bg_color(ta, lv_color_hex(FD_C_PANEL), 0);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(ta, 10, 0);
-    lv_obj_set_style_pad_hor(ta, 10, 0);
-    lv_obj_set_style_pad_ver(ta, 8, 0);
+    lv_obj_set_style_radius(ta, UI_PX(10), 0);
+    lv_obj_set_style_pad_hor(ta, UI_PX(10), 0);
+    lv_obj_set_style_pad_ver(ta, UI_PX(8), 0);
     lv_obj_set_style_border_width(ta, 0, 0);
     lv_obj_set_style_text_color(ta, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(ta, ui_font_title(), 0);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, 240);
     lv_textarea_set_placeholder_text(ta, hint);
@@ -471,12 +499,12 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(root, 10, 0);
+    lv_obj_set_style_pad_all(root, UI_PX(10), 0);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_align(root, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(root, 6, 0);
+    lv_obj_set_style_pad_row(root, UI_PX(6), 0);
 
     /* 顶栏 */
     lv_obj_t *head = lv_obj_create(root);
@@ -486,23 +514,23 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(head);
     lv_label_set_text(title, c->name);
-    lv_obj_set_style_text_font(title, &font_cn_16, 0);
+    lv_obj_set_style_text_font(title, ui_font_body(), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(FD_C_ACCENT), 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *done = ui_button(head, "完成", done_clicked);
-    lv_obj_set_size(done, 62, 34);
+    lv_obj_set_size(done, UI_PX(62), UI_PX(34));
     lv_obj_align(done, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *back = ui_button(head, "返回", back_clicked);
-    lv_obj_set_size(back, 62, 34);
-    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -70, 0);
+    lv_obj_set_size(back, UI_PX(62), UI_PX(34));
+    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -UI_PX(70), 0);
 
     /* 类型选择 */
     static const char *const mode_names[] = {"y=f(x)", "r(θ)", "x(t),y(t)", "F(x,y)"};
     lv_obj_t *modes = lv_obj_create(root);
     lv_obj_remove_style_all(modes);
-    lv_obj_set_size(modes, LV_PCT(100), 34);
+    lv_obj_set_size(modes, LV_PCT(100), UI_PX(34));
     lv_obj_remove_flag(modes, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(modes, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(modes, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
@@ -510,32 +538,37 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     for (int m = 0; m < 4; m++) {
         lv_obj_t *b = lv_button_create(modes);
         lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, 96, 30);
+        lv_obj_set_size(b, UI_PX(96), UI_PX(30));
         bool on = ((int)c->fn.mode == m);
         lv_obj_set_style_bg_color(b, lv_color_hex(on ? 0x1B3B48 : FD_C_PANEL2), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 10, 0);
+        lv_obj_set_style_radius(b, UI_PX(10), 0);
         lv_obj_set_style_border_width(b, 0, 0);
         lv_obj_set_user_data(b, (void *)(intptr_t)m);
         lv_obj_add_event_cb(b, mode_clicked, LV_EVENT_CLICKED, NULL);
 
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, mode_names[m]);
-        lv_obj_set_style_text_font(l, &font_cn_16, 0);
+        lv_obj_set_style_text_font(l, ui_font_body(), 0);
         lv_obj_set_style_text_color(l, lv_color_hex(on ? FD_C_ACCENT : FD_C_DIM), 0);
         lv_obj_center(l);
     }
 
+    /* 复平面模式下按复数求值，类型切换没有意义，整行隐藏。 */
+    if (model()->settings.complex_plane) lv_obj_add_flag(modes, LV_OBJ_FLAG_HIDDEN);
+
     /* 输入框 */
     g_ta1 = make_ta(root, c->fn.src1,
-                    c->fn.mode == FD_PLOT_EXPLICIT ? "例如 sin(x)" : "表达式");
+                    model()->settings.complex_plane
+                            ? "例如 2+3i"
+                            : (c->fn.mode == FD_PLOT_EXPLICIT ? "例如 sin(x)" : "表达式"));
     g_ta2 = NULL;
     g_ta2_row = NULL;
-    if (c->fn.mode == FD_PLOT_PARAMETRIC) {
+    if (c->fn.mode == FD_PLOT_PARAMETRIC && !model()->settings.complex_plane) {
         lv_obj_t *row = lv_obj_create(root);
         g_ta2_row = row;
         lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, LV_PCT(100), 40);
+        lv_obj_set_size(row, LV_PCT(100), UI_PX(40));
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
@@ -543,18 +576,18 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
 
         lv_obj_t *tag = lv_label_create(row);
         lv_label_set_text(tag, "y(t)=");
-        lv_obj_set_style_text_font(tag, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(tag, ui_font_body(), 0);
         lv_obj_set_style_text_color(tag, lv_color_hex(FD_C_DIM), 0);
 
         g_ta2 = make_ta(row, c->fn.src2, "例如 sin(t)");
-        lv_obj_set_width(g_ta2, 320);
+        lv_obj_set_width(g_ta2, UI_PX(320));
     }
 
     g_err = lv_label_create(root);
     lv_label_set_text(g_err, "");
     lv_label_set_long_mode(g_err, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(g_err, LV_PCT(100));
-    lv_obj_set_style_text_font(g_err, &font_cn_14, 0);
+    lv_obj_set_style_text_font(g_err, ui_font_small(), 0);
     lv_obj_set_style_text_color(g_err, lv_color_hex(FD_C_DANGER), 0);
     lv_obj_add_flag(g_err, LV_OBJ_FLAG_HIDDEN);
 
@@ -562,7 +595,7 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     lv_obj_t *tabs = lv_obj_create(root);
     g_tabs = tabs;
     lv_obj_remove_style_all(tabs);
-    lv_obj_set_size(tabs, LV_PCT(100), 32);
+    lv_obj_set_size(tabs, LV_PCT(100), UI_PX(32));
     lv_obj_remove_flag(tabs, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(tabs, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(tabs, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
@@ -570,18 +603,18 @@ lv_obj_t *ui_editor_create(lv_obj_t *parent)
     for (int i = 0; i < 4; i++) {
         lv_obj_t *b = lv_button_create(tabs);
         lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, 84, 28);
+        lv_obj_set_size(b, UI_PX(84), UI_PX(28));
         bool on = (i == 0);
         lv_obj_set_style_bg_color(b, lv_color_hex(on ? 0x1B3B48 : FD_C_PANEL2), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 9, 0);
+        lv_obj_set_style_radius(b, UI_PX(9), 0);
         lv_obj_set_style_border_width(b, 0, 0);
         lv_obj_set_user_data(b, (void *)(intptr_t)i);
         lv_obj_add_event_cb(b, tab_clicked, LV_EVENT_CLICKED, NULL);
 
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, k_tabs[i]);
-        lv_obj_set_style_text_font(l, &font_cn_16, 0);
+        lv_obj_set_style_text_font(l, ui_font_body(), 0);
         lv_obj_set_style_text_color(l, lv_color_hex(on ? FD_C_ACCENT : FD_C_DIM), 0);
         lv_obj_center(l);
     }

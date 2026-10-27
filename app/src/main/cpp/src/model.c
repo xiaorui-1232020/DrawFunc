@@ -75,6 +75,9 @@ static void doc_defaults(fd_doc *d)
     d->settings.angle_degrees = false;
     d->settings.quality = FD_QUALITY_HIGH;
     d->settings.crown_zoom = true;
+    d->settings.show_zoom_bar = false;
+    d->settings.show_presets = true;
+    d->settings.complex_plane = false;
     d->next_id = 1;
     d->geo_next_id = 1;
     d->selected_id = 0;
@@ -281,6 +284,33 @@ static void geo_auto_point_name(char *out, size_t cap)
     snprintf(out, cap, "P");
 }
 
+/** 非点对象（线段/角/距离/面积…）的名字：小写字母，跳过变量名与参数名。 */
+static void geo_auto_scalar_name(char *out, size_t cap)
+{
+    static const char *reserved = "abcdxytei";
+    for (int i = 0; i < 26 * 99; i++) {
+        char buf[12];
+        if (i < 26) {
+            snprintf(buf, sizeof(buf), "%c", 'a' + i);
+            if (strchr(reserved, buf[0])) continue;
+        } else {
+            snprintf(buf, sizeof(buf), "%c%d", 'a' + (i % 26), i / 26);
+        }
+        bool used = false;
+        for (int k = 0; k < g_doc.geo_count; k++) {
+            if (strcmp(g_doc.geos[k].name, buf) == 0) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            snprintf(out, cap, "%s", buf);
+            return;
+        }
+    }
+    snprintf(out, cap, "s");
+}
+
 fd_geo *model_add_geo(fd_geo_kind kind)
 {
     if (g_doc.geo_count >= FD_GEO_MAX) return NULL;
@@ -289,7 +319,11 @@ fd_geo *model_add_geo(fd_geo_kind kind)
     g->id = g_doc.geo_next_id++;
     g->kind = kind;
     g->visible = true;
-    if (kind == FD_GEO_POINT) geo_auto_point_name(g->name, sizeof(g->name));
+    if (kind == FD_GEO_POINT) {
+        geo_auto_point_name(g->name, sizeof(g->name));
+    } else {
+        geo_auto_scalar_name(g->name, sizeof(g->name));
+    }
     return g;
 }
 
@@ -508,13 +542,16 @@ static void serialize_doc(strbuf *sb, const fd_doc *d, const char *title)
     sb_printf(sb, "meta\t");
     sb_field(sb, title ? title : "");
     sb_printf(sb, "\n");
-    sb_printf(sb, "settings\t%d\t%d\t%d\t%d\t%d\t%d\n",
+    sb_printf(sb, "settings\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
               d->settings.show_grid ? 1 : 0,
               d->settings.show_axes ? 1 : 0,
               d->settings.show_numbers ? 1 : 0,
               d->settings.angle_degrees ? 1 : 0,
               d->settings.quality,
-              d->settings.crown_zoom ? 1 : 0);
+              d->settings.crown_zoom ? 1 : 0,
+              d->settings.show_zoom_bar ? 1 : 0,
+              d->settings.show_presets ? 1 : 0,
+              d->settings.complex_plane ? 1 : 0);
     sb_printf(sb, "viewport\t%.17g\t%.17g\t%.17g\t%d\n",
               d->vp.center_x, d->vp.center_y, d->vp.units_per_px,
               d->view_initialized ? 1 : 0);
@@ -600,6 +637,10 @@ static bool parse_doc(char *text, fd_doc *out)
             out->settings.angle_degrees = atoi(f[4]) != 0;
             out->settings.quality = atoi(f[5]);
             out->settings.crown_zoom = atoi(f[6]) != 0;
+            /* 后面的字段都是后加的：老存档没有，按各自的默认值处理。 */
+            out->settings.show_zoom_bar = n >= 8 && atoi(f[7]) != 0;
+            out->settings.show_presets = n >= 9 ? atoi(f[8]) != 0 : true;
+            out->settings.complex_plane = n >= 10 && atoi(f[9]) != 0;
         } else if (strcmp(f[0], "viewport") == 0 && n >= 5) {
             out->vp.center_x = atof(f[1]);
             out->vp.center_y = atof(f[2]);

@@ -19,8 +19,13 @@
 #include "src/libs/lodepng/lodepng.h"
 #include "ui.h"
 
+/* 屏幕尺寸：默认按 466×466 圆表，可用 -DFD_W= / -DFD_H= 覆盖来验证其它设备。 */
+#ifndef FD_W
 #define FD_W 466
+#endif
+#ifndef FD_H
 #define FD_H 466
+#endif
 
 static uint8_t *g_out;   /* 最终画面（ARGB8888，内存序 B,G,R,A） */
 static uint8_t *g_draw;  /* LVGL 的绘制缓冲 */
@@ -372,6 +377,58 @@ int main(int argc, char **argv)
         dump("16_editor_letters");
         tap(66, 387); /* 左下角大小写键 */
         dump("17_editor_upper");
+    }
+
+    /* 缩放栏：打开设置后图像屏底部出现 − / 滑轨 / + */
+    model()->settings.show_zoom_bar = true;
+    ui_show(UI_SCR_GRAPH);
+    pump(6);
+    dump("18_graph_zoom_bar");
+    model()->settings.show_zoom_bar = false;
+
+    /* 几何对象在列表里的行（名字 + 类型/度量值 + 显隐 + 删除） */
+    ui_show(UI_SCR_LIST);
+    pump(4);
+    dump("19_list_geo");
+    ui_show(UI_SCR_GRAPH);
+    pump(4);
+
+    /* 导出 PNG 的命名对话框（文本输入 + 键盘） */
+    ui_show(UI_SCR_ARCHIVE);
+    pump(4);
+    ui_archive_open_export_dialog();
+    pump(4);
+    dump("21_export_dialog");
+    ui_archive_close_dialog();
+
+    /* 点击曲线：卡片显示该点坐标 + 解析式 + 零点/极值 */
+    ui_show(UI_SCR_GRAPH);
+    model_reset_view();
+    ui_graph_invalidate();
+    pump(4);
+    tap(233, 233);
+    pump(4);
+    dump("22_curve_point");
+
+    /* 同一点再次点击：在重叠的曲线之间切换 */
+    pump(60);
+    tap(233, 233);
+    pump(4);
+    dump("23_cycle_curve");
+
+    /* 复平面：一条复数表达式，结果画成点 */
+    {
+        int id = model_add_curve(FD_PLOT_EXPLICIT);
+        fd_curve *c = model_curve(id);
+        if (c) {
+            snprintf(c->fn.src1, sizeof(c->fn.src1), "2+3i");
+            model_select(id);
+        }
+        model()->settings.complex_plane = true;
+        ui_show(UI_SCR_GRAPH);
+        pump(6);
+        dump("20_complex");
+        model()->settings.complex_plane = false;
     }
 
     /* PNG 导出（先回到图像屏，导出按模型重画） */
