@@ -1549,14 +1549,25 @@ private fun DrawScope.drawCartesianLabels(
     // 为什么是短边比例、为什么是 1.29%，见 `PlotMetrics.LABEL_SHIFT_QUANTUM_FRACTION`。
     val quantumPx = labelFollowQuantumPx(metrics.sizePx)
 
-    // ---- x 轴刻度：画在 x 轴下方一点；轴不在屏内就贴着底部（仍留安全余量）----
-    // 这一支是改动前就有的、行为也对（"轴在屏内 / 轴出屏"两种情况），原样保留：
-    // 它只决定"这一行**想**画在哪个高度"，会不会被裁由下面那次贴边兜底。
+    // ---- x 轴刻度：画在 x 轴下方一点；轴滑出屏幕就贴着**离它最近**的那条边 ----
+    //
+    // 2026-10-27（本轮）：修"手把坐标轴划到屏幕外，横轴数字从上面跳到下面"。
+    // 旧写法是 `if (轴在屏内) 轴下一点 else h − safeInset` —— 轴从**上缘**划出去时，
+    // 后一支会把整行瞬移到屏幕**底部**（跨整屏一跳）。现在统一成"先算想去的高度、
+    // 再连续夹进可用区"：轴在屏内就跟着轴走，出上缘停在顶部、出下缘停在底部，
+    // 全程连续，没有瞬移。
     val axisY = vp.toScreenY(0.0)
     val lo = safeInset + textPx
     val hi = h - safeInset
-    val base = if (axisY >= 0f && axisY <= h) axisY + textPx * 1.15f else h - safeInset
-    val wantedBaseline = if (lo <= hi) base.coerceIn(lo, hi) else h / 2f
+    val base = if (lo <= hi) (axisY + textPx * 1.15f).coerceIn(lo, hi) else h / 2f
+    val wantedBaseline = base
+    // 整行是不是已经被顶到屏幕**底**边上了（轴滑出下缘 / 轴本身贴着底）——
+    // 下面"对角线分区"只在贴边时才参与判定。
+    val xRowPinnedBottom = base >= hi - 0.5f
+    // 纵轴那一列的数字是不是已经贴到屏幕**左**缘了（轴滑出左缘 / 贴着左缘）
+    val axisX = vp.toScreenX(0.0)
+    val labelX = axisX - textPx * 0.5f
+    val yPinnedLeft = labelX <= safeInset + textPx * 0.5f
 
     // 整行同一个高度 → 纵向只夹一次（"同一个数字只夹一次"），夹完再拿它算圆屏可用宽度。
     // 这一步顺带修掉一支老毛病：`h - safeInset` 那个"贴下边缘"的高度只算了 baseline，
@@ -1593,16 +1604,27 @@ private fun DrawScope.drawCartesianLabels(
     val xLoNatural = maxOf(safeInset, w / 2f - xBand)
     val xHiNatural = minOf(w - safeInset, w / 2f + xBand)
 
-    // 两条轴共用的**角锚点 + 臂长**（见 `PlotMetrics.labelCornerAnchorPx`）：
-    // x 行从角锚点**向右**量一段臂长，y 列从角锚点**向上**量同一段臂长 ——
-    // 于是两条范围"从同一点出发、量同一段长度"，不再出现"纵坐标显示多、横坐标显示少"
-    // （上一版 x 行的左端跟着弦宽走、y 列的下端恒在屏幕下缘，起点和长度都不一样）。
-    // 与可见边界取交是硬要求：范围内每个锚点都过得了完整可见闸。
-    val corner = labelCornerAnchorPx(w, h, safeInset, isRound)
-    val span = labelRangeSpanPx(w, h, safeInset)
-    val xRange = xRowRangeFromCorner(xLoNatural, xHiNatural, corner.xPx, span) ?: return
-    val xLo = xRange.loPx
-    val xHi = xRange.hiPx
+    // 两条轴共用的**角锚点**（见 `PlotMetrics.labelCornerAnchorPx`）—— 本轮它只剩一个用处：
+    // 给出可用区左下角那一点，作为"左下角对角线"的过点（见下面 `cornerDiag`）。
+    // ---- 显示区域（本轮改）：两条定义域都铺满，只有左下角按 45° 对角线分 ----
+    //
+    // 上一版为了"两条范围长度一致"，x 行从角锚点起量一段臂长（圆表左端 ≈ 85px）、
+    // y 列从同一个角锚点向上量（下端 ≈ 381px）：于是屏幕左边 85px 内没有横轴数字、
+    // 底部 60px 内没有纵轴数字。
+    // 用户本轮要求：两条都铺满，并且"显示区域限定，对角线为分界线"。
+    //
+    // 实现：横轴数字的横向定义域 = 整条可用宽度（圆屏仍按弦宽收），
+    // 纵轴数字的纵向定义域 = 整屏高度（见下面 y 列）。
+    // 真正会抢地盘的只有**左下角**：两条轴都滑出屏幕、两排数字同时贴边时，
+    // 那一块用一条 45° 对角线划开 —— 线过的是可用区左下角那一点
+    // （`labelCornerAnchorPx` 给出的角锚点，x + y = 常数）。
+    // 横轴数字只留在对角线**右下**侧（左端抬到 `diag − 行高`），
+    // 纵轴数字只留在**左上**侧（见下面逐个数字的 `cyLimit`）。
+    // 轴在屏内时两个限制都不参与，轴下方的数字照旧铺满整行。
+    val cornerDiag = labelCornerAnchorPx(w, h, safeInset, isRound).let { it.xPx + it.yPx }
+    val cornerSplit = xRowPinnedBottom && yPinnedLeft
+    val xLo = if (cornerSplit) maxOf(xLoNatural, cornerDiag - rowCenterY) else xLoNatural
+    val xHi = xHiNatural
 
     // 逐个刻度：值从小到大 = 屏幕上从左到右。顺序很要紧 —— 贴边会把边缘那个数字顶到
     // 和邻居同一条竖线上，"谁先占位"直接决定谁留下。
@@ -1679,7 +1701,6 @@ private fun DrawScope.drawCartesianLabels(
     sticky.prune(sticky.xRow, vp.worldLeft, vp.worldRight, step)
 
     // ---- y 轴刻度：骑在 y 轴**左边**（右对齐）----
-    //
     // ⚠️ 本轮删掉了"轴不在屏内就改贴左缘（左对齐）"那条分支，它是**抽搐**的真因之一：
     // 轴一跨过屏幕左缘，整列数字就被同时换了**对齐方式**和**位置**；而在轴正好压着
     // 左缘的那几像素里，"把右对齐的文字拉回安全区"所需的距离比上一版预算大一点点
@@ -1690,8 +1711,6 @@ private fun DrawScope.drawCartesianLabels(
     // 现在只有一条规则：数字**永远**骑在轴左边（右对齐），"要不要挪、挪到哪"交给
     // 横向的 `pinLabelIntoBand` 按可用区算 —— 轴从哪边出去，数字就贴哪一边的边，
     // 而且跨过边缘时位置是**连续**的（右对齐的限制正好等于夹取在那一侧的极限值）。
-    val axisX = vp.toScreenX(0.0)
-    val labelX = axisX - textPx * 0.5f
     val align = rightAlign
     // 这个对齐方式下锚点是不是文字**右边界**（下面把边界换算成中心要用它）
     val anchorIsRight = true
@@ -1699,13 +1718,13 @@ private fun DrawScope.drawCartesianLabels(
     // 纵轴这一列：值从小到大 = 屏幕上从下到上，判定顺序同样按它。
     // lastTop 是上一个画出去的数字占到的**最高一行**（屏幕 y 向下，越小越高）。
     //
-    // 纵向的可用区间 = **从角锚点向上量同一段臂长**（和 x 行共用 corner / span）：
-    // 上一版这里是 `[safeInset, h − safeInset]`（一路顶到屏幕下缘），而 x 行那边
-    // 被弦宽截在中间 —— 两条范围起点不同、长度也不同，用户看到"纵坐标显示多、
-    // 横坐标显示少"。现在两条都是从 corner 出发、量 span，端头只受各自的可见边界截断。
-    val yRange = yColumnRangeFromCorner(safeInset, h - safeInset, corner.yPx, span)
-    val yLoColumn = yRange?.loPx ?: return
-    val yHiColumn = yRange.hiPx
+    // 纵轴这一列：本轮用户要求"整屏都能显示" —— 纵向定义域直接铺满可用高度。
+    // （上一版为了和横轴"口径一致"从角锚点向上量臂长，屏幕底部那 ≈ 60px 里
+    //   永远看不到纵轴数字；现在改成 [safeInset, h − safeInset]。）
+    // 退化尺寸不在这里判：`pinLabelNearAxis → pinLabelIntoBand` 放不下就是 null，
+    // 一个数字都不会画（不会画出屏外）。
+    val yLoColumn = safeInset
+    val yHiColumn = h - safeInset
     var lastTop = Float.POSITIVE_INFINITY
     var yTickIndex = ceil(vp.worldBottom / step).toLong()
     guard = 0
@@ -1763,10 +1782,12 @@ private fun DrawScope.drawCartesianLabels(
                 val cx = pinLabelIntoBand(centerX, tw / 2f, yLo, yHi)
                 if (cx != null) {
                     val drawX = if (anchorIsRight) cx + tw / 2f else cx - tw / 2f
-                    // 纵向不重叠：和上一个**画出去**的数字比它占到的最高一行。
-                    // 纵轴方向的两个数字之间只有高度差，"两者半宽之和"就等于两个纵向半高之和，
-                    // 所以直接比包围盒的上下沿即可（横向还有实测字宽，纵向只有估出来的半高）。
-                    if (lastTop - bottom >= gapPx) {
+                    // 对角线限定（只在"左下角撞车"的姿势下生效，见 x 行那段）：
+                    // 纵轴数字不许越过 45° 分界线（x + y = diag），右下那块留给横轴数字。
+                    // 轴在屏内、或纵轴不在左缘时 `cyLimit` 是 +∞，这条判据完全不参与。
+                    // 越界的整颗不画，并从迟滞集合里摘掉（否则它会靠宽松阈值赖着占位）。
+                    val cyLimit = if (cornerSplit) cornerDiag - cx else Float.POSITIVE_INFINITY
+                    if (cy <= cyLimit && lastTop - bottom >= gapPx) {
                         val drawn = drawLabel(
                             canvas, text, drawX, cy + centerOffset,
                             align, paint, metrics, safeInset, isRound

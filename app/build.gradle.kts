@@ -41,8 +41,8 @@ android {
         // 历史：1.0 / 1 → **1.0fix / 2**（用户 2026-10-05 点名："把安装包版本号升到 1.0fix，
         // versioncode 变成 2"）→ **1.1 / 3**（用户 2026-10-05 点名："签名完之后再安装、
         // 升版本号和 versioncode"，选项里选的是 `1.1 / 3`）。
-        versionCode = 123
-        versionName = "1.2.27"
+        versionCode = 124
+        versionName = "1.2.28"
     }
 
     // release 签名：密钥路径与口令放在项目根目录的 keystore.properties 里
