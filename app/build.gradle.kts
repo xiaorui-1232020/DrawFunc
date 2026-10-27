@@ -7,6 +7,9 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+// 可选：构建时加 `-PabiSplits`，按 ABI 拆成三个包并额外产出 universal 包。
+val abiSplits = providers.gradleProperty("abiSplits").isPresent
+
 android {
     namespace = "com.functiondrawer.watch"
 
@@ -63,6 +66,17 @@ android {
         ndk {
             // 目标手表是 32 位；带上 arm64 以便在新设备/模拟器上也能跑。
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+        }
+    }
+
+    if (abiSplits) {
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include("x86_64", "armeabi-v7a", "arm64-v8a")
+                isUniversalApk = true
+            }
         }
     }
 
