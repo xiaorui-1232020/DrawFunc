@@ -793,6 +793,9 @@ class KeyboardModelTest {
                     if (action is KeyAction.Insert && action.text.endsWith("()")) {
                         // 标签不一定等于函数名（`⌈x⌉` 插的是 `ceil()`），所以按动作反推
                         val name = action.text.dropLast(2)
+                        // 根号族是**符号结构**（`√()` / `∛()`），名字不是字母；
+                        // 它们的 cursorBack 由上面那条 `root keys insert…` 单独钉住
+                        if (name == "√" || name == "∛") continue
                         assertTrue(
                             "$mode / $page 的 ${key.label} 插的函数名 '$name' 必须是字母",
                             name.isNotEmpty() && name.all { it.isLetter() }
@@ -915,13 +918,15 @@ class KeyboardModelTest {
     }
 
     @Test
-    fun `root keys insert just the root sign`() {
-        // √ 和 ∛ 是符号键：插进去的就是符号，括号由用户自己按
+    fun `root keys insert the implicit brace form and put the caret inside`() {
+        // √ / ∛ 插的是 `√()` / `∛()`。这对括号是**隐式括号**：排版层把它们吃掉、
+        // 只画一根开方横线，但源码里必须真的有一对 —— 否则 `√x+1` 会被解析成
+        // `√x` 再 `+1`（用户原话："让输入根号之后在解析里面自动带根号，
+        // 不然根号里不能输整式，还要加一个看不见的括号才行"）。
         val root = allKeys(KeyPage.ELEMENTARY, PlotMode.EXPLICIT).first { it.label == "√" }
-        assertEquals(KeyAction.Insert("√"), root.action)
+        assertEquals(KeyAction.Insert("√()", cursorBack = 1), root.action)
         val cbrt = variantsFor("√").first { it.label == "∛" }
-        assertEquals(KeyAction.Insert("∛"), cbrt.action)
-        assertEquals(0, (cbrt.action as KeyAction.Insert).cursorBack)
+        assertEquals(KeyAction.Insert("∛()", cursorBack = 1), cbrt.action)
     }
 
     // ---- 长按变体 ----
@@ -959,8 +964,13 @@ class KeyboardModelTest {
     }
 
     @Test
-    fun `the root key offers square root and cube root`() {
-        assertEquals(listOf("√", "∛"), variantsFor("√").map { it.label })
+    fun `the root key offers square root cube root and nth root`() {
+        // 第三个是 n 次根号：源码里是 `root(,)`（引擎的 root(被开方数, 次数)），
+        // 光标落在**次数槽位**（`,` 之后、`)` 之前）—— 和 GeoGebra 一样
+        // "输入 n 次根号时优先定位到次方位置"。
+        assertEquals(listOf("√", "∛", "ⁿ√"), variantsFor("√").map { it.label })
+        val nth = variantsFor("√").first { it.label == "ⁿ√" }
+        assertEquals(KeyAction.Insert("root(,)", cursorBack = 1), nth.action)
     }
 
     @Test
@@ -1371,15 +1381,50 @@ class KeyboardModelTest {
     }
 
     @Test
-    fun `the root sign is a symbol and is deleted one character at a time`() {
-        // √ / ∛ 是符号键：它们不在函数名表里，退格就是普通的删一个字符
+    fun `the root keys delete their whole empty skeleton in one press`() {
+        // 需求原话："像根号删除的时候就是一步删除，不要点击删除之后还露出来括号，
+        // 把这个括号作隐式括号" —— 骨架要么整个在、要么整个没。
         val root = elementaryKey("√")
         val (t1, c1) = editText("", 0, root.action)
-        assertEquals("√", t1)
-        assertEquals(1, c1)
+        assertEquals("√()", t1)
+        assertEquals(2, c1)
         assertEquals("" to 0, editText(t1, c1, KeyAction.Backspace))
-        assertEquals("√" to 1, editText("√2", 2, KeyAction.Backspace))
-        assertEquals("2*√" to 3, editText("2*√2", 4, KeyAction.Backspace))
+        // 光标夹在骨架中间也是一次全删
+        assertEquals("" to 0, editText("√()", 1, KeyAction.Backspace))
+        // 前面还有内容时只删骨架
+        assertEquals("2+" to 2, editText("2+√()", 5, KeyAction.Backspace))
+        // 括号里已经有内容 → 逐字符删（用户还在编辑式子）
+        assertEquals("√(x" to 3, editText("√(x)", 4, KeyAction.Backspace))
+        // ∛ 同理
+        val cbrt = variantsFor("√").first { it.label == "∛" }
+        val (t2, c2) = editText("", 0, cbrt.action)
+        assertEquals("∛()", t2)
+        assertEquals("" to 0, editText(t2, c2, KeyAction.Backspace))
+        // n 次根号：`root(,)` 也是一次删干净，光标停在次数槽位时同样
+        val nth = variantsFor("√").first { it.label == "ⁿ√" }
+        val (t3, c3) = editText("", 0, nth.action)
+        assertEquals("root(,)", t3)
+        assertEquals(6, c3)
+        assertEquals("" to 0, editText(t3, c3, KeyAction.Backspace))
+        // 次数已经填了：不再整体删（那是用户正在编辑的式子）
+        assertEquals("root(x," to 7, editText("root(x,)", 8, KeyAction.Backspace))
+    }
+
+    @Test
+    fun `a function key glued to a letter is prefixed with a times sign`() {
+        // 用户原话："很尴尬的情况就是 a·sinx 在没打乘号的时候被识别成 asinx"。
+        // 词法器把连着的字母读成一个名字，所以键盘要替用户补上 `*`。
+        val sin = allKeys(KeyPage.ELEMENTARY, PlotMode.EXPLICIT).first { it.label == "sin" }
+        assertEquals("a*sin()" to 6, editText("a", 1, sin.action))
+        // 紧跟在数字 / 右括号后面也一样
+        assertEquals("2*sin()" to 6, editText("2", 1, sin.action))
+        assertEquals("(x)*sin()" to 8, editText("(x)", 3, sin.action))
+        // 开头、运算符后面、左括号后面都不补（那不是"粘成一个名字"的情形）
+        assertEquals("sin()" to 4, editText("", 0, sin.action))
+        assertEquals("x+sin()" to 6, editText("x+", 2, sin.action))
+        assertEquals("2*sin()" to 6, editText("2*", 2, sin.action))
+        // 根号族不补：`√` / `∛` 不是字母，词法器读到那里就停了
+        assertEquals("a√()" to 3, editText("a", 1, elementaryKey("√").action))
     }
 
     @Test
@@ -1401,7 +1446,10 @@ class KeyboardModelTest {
                 for (key in allKeys(page, mode)) {
                     val action = key.action
                     if (action is KeyAction.Insert && action.text.endsWith("()")) {
-                        typed += action.text.dropLast(2)
+                        val name = action.text.dropLast(2)
+                        // 根号族插的是符号骨架（`√()` / `∛()`），不是"函数名()"，
+                        // 整体删除走的是 STRUCTURAL_TEMPLATES 那条路，不在这份清单里
+                        if (name != "√" && name != "∛") typed += name
                     }
                 }
             }
@@ -1411,7 +1459,8 @@ class KeyboardModelTest {
             for (variant in variantsFor(entry)) {
                 val action = variant.action
                 if (action is KeyAction.Insert && action.text.endsWith("()")) {
-                    typed += action.text.dropLast(2)
+                    val name = action.text.dropLast(2)
+                    if (name != "√" && name != "∛") typed += name
                 }
             }
         }

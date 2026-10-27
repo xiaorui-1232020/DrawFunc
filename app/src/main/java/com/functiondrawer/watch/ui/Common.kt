@@ -12,6 +12,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -43,6 +45,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -53,6 +67,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
+import com.functiondrawer.watch.engine.Calc
 import com.functiondrawer.watch.ui.theme.PillShape
 import kotlinx.coroutines.delay
 
@@ -231,6 +246,16 @@ fun MiniChip(
         contentColor = content,
         shape = PillShape,
         modifier = modifier
+            // ColorOS 16 的玻璃质感：一层柔和投影让它浮起来，
+            // 上沿一道反光 + 1dp 亮边让它像玻璃而不是色块。
+            // 只在液态玻璃主题下挂；Material 主题保持原样。
+            .then(
+                if (LocalGlassTheme.current) {
+                    Modifier.glassSurface(PillShape)
+                } else {
+                    Modifier
+                }
+            )
             .graphicsLayer {
                 // 缩小只发生在图层里：chip 的占位尺寸不变，旁边的 chip 不会被挤动。
                 scaleX = press.scale
@@ -244,14 +269,16 @@ fun MiniChip(
             )
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // 按下时叠一层很淡的白 = 提亮一档。
+            // 按下时叠一层很淡的覆盖色 = 明度挪一档：夜间是白（提亮）、白天是深色（压暗）。
+            // 颜色只有 KeyPalette.pressGlow 一个来源 —— 这里原来写的是 Color.White，
+            // 白底上会变成"白叠白"，按下去完全没反馈。
             // 用图层 alpha（而不是 background(color.copy(alpha))）是为了让它每帧
             // 只失效图层、不重组；画在 Text 之前，所以文字始终在最上面。
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = press.glowAlpha }
-                    .background(Color.White)
+                    .background(KeyPalette.pressGlow)
             )
             Text(
                 text = label,
@@ -297,7 +324,14 @@ fun WatchIconButton(
     onLongClick: (() -> Unit)? = null
 ) {
     // 同 KeyPalette：填充态 = 强调色，普通态 = 深灰；图标一律纯白。
-    val bg = containerColor ?: if (filled) KeyPalette.accent else KeyPalette.normal
+    val bg = containerColor ?: when {
+        filled -> KeyPalette.accent
+        // 液态玻璃：工具条上的图标键也是一块半透明亮面 + 1dp 高光边。
+        // 只换颜色和描边，尺寸/点击/长按一律不动。
+        LocalGlassTheme.current -> GlassTokens.surface
+        else -> KeyPalette.normal
+    }
+    // 同 KeyPalette：填充态 = 强调色，普通态 = 深灰；图标一律纯白。
     val fg = contentColor ?: KeyPalette.text
     val press = rememberPressFeedback()
     // 长按的"有没有出界"观察者（只在这个按钮真的带长按时才挂，见上面那段说明）。
@@ -349,6 +383,16 @@ fun WatchIconButton(
         // 同一套"胶囊语言"上。
         shape = PillShape,
         modifier = modifier
+            // ColorOS 16 的玻璃质感：一层柔和投影让它浮起来，
+            // 上沿一道反光 + 1dp 亮边让它像玻璃而不是色块。
+            // 只在液态玻璃主题下挂；Material 主题保持原样。
+            .then(
+                if (LocalGlassTheme.current) {
+                    Modifier.glassSurface(PillShape)
+                } else {
+                    Modifier
+                }
+            )
             // 尺寸**显式**算出来：宽 = 0.18 短边（[WatchMetrics.iconButton]），
             // 高 = 宽 × [ICON_BTN_ASPECT]（= 0.18 × 0.125/0.18 = 0.125 短边）。
             //
@@ -392,7 +436,7 @@ fun WatchIconButton(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = press.glowAlpha }
-                    .background(Color.White)
+                    .background(KeyPalette.pressGlow)
             )
             Icon(
                 imageVector = icon,
@@ -526,7 +570,17 @@ internal fun FloatPill(
         color = container,
         contentColor = KeyPalette.text,
         shape = PillShape,
-        modifier = modifier.then(
+        modifier = modifier
+            // ColorOS 16 的玻璃质感：一层柔和投影让它浮起来，
+            // 上沿一道反光 + 1dp 亮边让它像玻璃而不是色块。
+            // 只在液态玻璃主题下挂；Material 主题保持原样。
+            .then(
+                if (LocalGlassTheme.current) {
+                    Modifier.glassSurface(PillShape)
+                } else {
+                    Modifier
+                }
+            ).then(
             if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
         )
     ) {
@@ -552,19 +606,11 @@ internal fun FloatPill(
 /**
  * 数值显示。刻度、坐标这类地方要短，而且不能受系统区域设置影响
  * （某些地区用逗号做小数点，会直接毁掉数学表达式的可读性）。
+ *
+ * 具体规则（精度阈值 / 小数位 / 科学计数）都在引擎的 [Calc.format] 里，
+ * 这里只保留原来的函数名，所有调用点不用改。
  */
-fun formatNumber(v: Double): String = when {
-    v.isNaN() -> "—"
-    !v.isFinite() -> if (v > 0) "∞" else "−∞"
-    v == 0.0 -> "0"
-    kotlin.math.abs(v) >= 1e5 || kotlin.math.abs(v) < 1e-4 ->
-        String.format(java.util.Locale.US, "%.1e", v)
-    else -> {
-        val rounded = kotlin.math.round(v * 1000.0) / 1000.0
-        if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString()
-        else rounded.toString()
-    }
-}
+fun formatNumber(v: Double): String = Calc.format(v)
 
 // ---------------------------------------------------------------------------
 // 顶部工具条上那一条「从一颗键滑到另一颗键」唤出撤销 / 重做（本轮新增）
@@ -685,8 +731,24 @@ internal class ToolbarUndoMenu internal constructor(
     /** 立刻收起（点箭头之后、或者想给别的地方让位时用）。 */
     val close: () -> Unit,
     /** 记一次"用户还在用这个菜单"——重新开始那 4 秒的自动收起计时。 */
-    val noteInteraction: () -> Unit
+    val noteInteraction: () -> Unit,
+    /**
+     * 撤销箭头被按下时的额外通知（新手教程用来上报 `undo_done` 信号）。
+     * 默认 null = 什么都不做，其它调用点一个字都不用改。
+     */
+    val onUndo: (() -> Unit)? = null
 )
+
+/**
+ * 工具条撤销菜单当前是否展开（全局唯一一份）。
+ *
+ * 谁在读：`DrawerDeck` 的 `HorizontalPager.userScrollEnabled` ——
+ * 菜单展开期间横滑必须锁死，否则"设置键划向加号键"这一串会被 Pager
+ * 当成翻页（用户报的"设置键划向加号键不能移动界面"）。
+ *
+ * 谁在写：`rememberToolbarUndoMenu` 的 `LaunchedEffect(openState.value)`。
+ */
+internal val activeToolbarMenuOpen: MutableState<Boolean> = mutableStateOf(false)
 
 /**
  * 造一份工具条撤销菜单的状态（两屏各调一次，实现只有这一份）。
@@ -697,7 +759,16 @@ internal class ToolbarUndoMenu internal constructor(
  *   所以这套几何在三块屏上都成立：圆屏行宽是弧宽、非圆屏是"屏宽 − 左右各 3%"。
  */
 @Composable
-internal fun rememberToolbarUndoMenu(metrics: WatchMetrics): ToolbarUndoMenu {
+internal fun rememberToolbarUndoMenu(
+    metrics: WatchMetrics,
+    /**
+     * 菜单展开 / 收起时回调（新手教程用来上报 `undo_menu` 信号）。
+     * 默认 null，其它调用点不受影响。
+     */
+    onOpenChanged: ((Boolean) -> Unit)? = null,
+    /** 撤销箭头按下时的额外通知（见 [ToolbarUndoMenu.onUndo]）。 */
+    onUndo: (() -> Unit)? = null
+): ToolbarUndoMenu {
     // `mutableStateOf` 而不是 `by`：手势协程里要读写它，而手势块是用
     // `remember(keyWidthPx)` 建一次的 —— 它捕获的必须是**稳定对象**（状态本身），
     // 不能是每一帧重新装箱的那个值（那是"闭包吃旧值"的经典坑，
@@ -712,6 +783,10 @@ internal fun rememberToolbarUndoMenu(metrics: WatchMetrics): ToolbarUndoMenu {
     // ---- 展开 / 收起：一个 Animatable 驱动三个派生量（宽 / 高 / 透明度）----
     // 收起时**不立刻**把 present 置 false：先让动画跑完，再摘掉（才有退场动画）。
     LaunchedEffect(openState.value) {
+        // 展开 / 收起时同步全局锁（`DrawerDeck` 用它锁死 Pager 横滑）
+        activeToolbarMenuOpen.value = openState.value
+        // 教程信号：展开 / 收起都要知道（第 15 步靠它推进）
+        onOpenChanged?.invoke(openState.value)
         if (openState.value) {
             present = true
             anim.animateTo(
@@ -763,7 +838,8 @@ internal fun rememberToolbarUndoMenu(metrics: WatchMetrics): ToolbarUndoMenu {
         progress = anim.asState(),
         gesture = gesture,
         close = { openState.value = false },
-        noteInteraction = { interaction.value++ }
+        noteInteraction = { interaction.value++ },
+        onUndo = onUndo
     )
 }
 
@@ -851,6 +927,9 @@ internal fun ToolbarUndoRedoMenu(
                     // 先"记一次动作"（重新开始自动收起计时），再交出去干活 ——
                     // 顺序反了的话，撤销刚好把这一屏换掉时这次计时就白记了。
                     menu.noteInteraction()
+                    // 教程信号（第 16 步）：必须在真正撤销**之前**上报 ——
+                    // 撤销可能让界面换一屏，晚一步这个回调就随着组合一起没了。
+                    menu.onUndo?.invoke()
                     onUndo()
                 }
             )
@@ -886,7 +965,7 @@ private fun ToolbarArrowKey(
     onClick: () -> Unit
 ) {
     // "可用 ↔ 变暗"之间**渐变**（140ms）：撤到栈底那一下是慢慢暗下去的，
-    // 不是啪一下换色 —— 和清屏键的 dangerAlpha 渐变是同一个语言。
+    // 不是啪一下换色。
     val lit by animateFloatAsState(
         targetValue = if (enabled) 1f else 0f,
         animationSpec = tween(durationMillis = TOOLBAR_MENU_KEY_MS, easing = FastOutSlowInEasing)
@@ -895,6 +974,8 @@ private fun ToolbarArrowKey(
         icon = if (undo) Icons.AutoMirrored.Filled.ArrowBack else Icons.AutoMirrored.Filled.ArrowForward,
         contentDescription = if (undo) "撤销" else "重做",
         metrics = metrics,
+        // 新手教程第 16 步要指到撤销箭头（只在这颗上挂锚点；它不参与布局/命中）
+        modifier = if (undo) Modifier.tutorialAnchor(TutorialAnchors.UNDO_BUTTON) else Modifier,
         // 可用 = 强调蓝的暗档（和 `+` 键同色：它也是"主操作"级别的键）；
         // 不可用 = 深灰再压暗一半（看得出是"同一个键、现在没用"）。
         containerColor = lerp(
@@ -1003,3 +1084,113 @@ internal fun Modifier.pressInsideGuard(guard: PressInsideGuard): Modifier = poin
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// 液态玻璃质感（ColorOS 16 风格）
+// ---------------------------------------------------------------------------
+
+/**
+ * 玻璃"光泽 + 悬浮影"：顶部一道白色渐变 + 一圈 1dp 亮边 + **按钮下方一层柔和的投影**。
+ *
+ * 这是 ColorOS 16 / iOS 26 那套液态玻璃最容易被认出来的三笔 ——
+ * 半透明底色谁都会做，**有光沿着上边缘扫过去、底下还有一层影把它托起来**才像玻璃。
+ *
+ * ### 为什么投影自己画，不用 `Modifier.shadow`
+ *
+ * `Modifier.shadow` 的 `ambientColor` / `spotColor` 只有在 **API 28+** 且
+ * `elevation > 0` 时才真的画；本 App 的下限是 Android 7（API 24），
+ * 而且在手表那块屏上 4dp 的 elevation 投出来几乎看不见 —— 这就是用户说的
+ * "毛玻璃主题下按钮下面的阴影还没做"。
+ * 现在改成 `drawBehind` 里手绘几层同心圆角矩形：不依赖平台版本、
+ * 强度直接乘「按钮下阴影强度」那一档，夜里也能看清。
+ *
+ * 画在内容之**后**（`drawWithContent` 里先 drawContent 再画光泽），
+ * 所以它也会轻轻扫过文字；alpha 控制在 0.14 以下，不影响可读性。
+ * 不用离屏层、不读任何状态，成本就是几条绘制指令。
+ *
+ * @param shape 按钮的形状（本 App 一律是 [PillShape]）
+ * @param elevation 投影的基准高度（会再乘「按钮下阴影强度」）
+ */
+fun Modifier.glassSurface(shape: Shape, elevation: Dp = 5.dp): Modifier {
+    // 昼夜两套材质参数。白天的玻璃不是"把夜里的白色高光留着"就行 ——
+    // 浅色底上 14% 白完全看不见，必须用更白的面和更亮/更强的边。
+    val light = GlassTokens.isLight
+    // ---- 按钮下阴影 ----
+    //
+    // 强度来自设置页的「按钮下阴影强度」（`activeKeyShadow`，默认 10%）。
+    // 先给一个 0.10 的底，再乘用户那一档：默认 10% 时已经有明确的"浮起来"，
+    // 拉到 100% 时会很重（那是用户自己选的，不在代码里压住）。
+    val strength = activeKeyShadow.value.coerceIn(0f, 1f)
+    val shadowBase = 0.10f + 0.62f * strength
+    return this
+        // ---- ① 柔和投影：手绘，不依赖平台 `.shadow` ----
+        .drawBehind {
+            val h = size.height
+            val w = size.width
+            if (h <= 0f || w <= 0f) return@drawBehind
+            // ColorOS 16 的悬浮感 = "更散的环境影（往下偏）+ 一圈贴边的接触影"。
+            // 没有离屏模糊，就用 4 层同心圆角矩形叠出柔边：越外越大、越淡。
+            val drop = elevation.toPx() * 0.55f + h * 0.06f
+            for (i in 4 downTo 1) {
+                val grow = h * 0.045f * i
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = shadowBase * 0.55f / i),
+                    topLeft = Offset(-grow * 0.5f, drop - grow * 0.5f + h * 0.02f),
+                    size = Size(w + grow, h + grow),
+                    cornerRadius = CornerRadius((h + grow) * 0.5f)
+                )
+            }
+            // 最强的一层贴在下缘 1dp 处：这是"接触影"，让按钮看起来真的落在底上。
+            drawRoundRect(
+                color = Color.Black.copy(alpha = shadowBase * 0.34f),
+                topLeft = Offset(w * 0.08f, h * 0.90f),
+                size = Size(w * 0.84f, h * 0.14f),
+                cornerRadius = CornerRadius(h * 0.07f)
+            )
+        }
+        // ⚠️ border 必须在**内容**的最外层：Compose 的绘制顺序是内层先画，
+        // border 放里面会被背景和光泽盖住（就是"按钮没有玻璃边框"的原因）。
+        .border(
+            width = 1.dp,
+            brush = Brush.verticalGradient(
+                // 夜间：白 42% → 10% → 18%（深色底上的边缘高光）
+                // 白天：白 90% → 35% → 55%（浅色底上要靠"更白"才看得出边）
+                0f to Color.White.copy(alpha = if (light) 0.90f else 0.42f),
+                0.45f to Color.White.copy(alpha = if (light) 0.35f else 0.10f),
+                1f to Color.White.copy(alpha = if (light) 0.55f else 0.18f)
+            ),
+            shape = shape
+        )
+        .clip(shape)
+        .drawWithContent {
+            drawContent()
+            val h = size.height
+            val w = size.width
+            if (h <= 0f || w <= 0f) return@drawWithContent
+            // 顶部 62% 的白色光泽：
+            //   夜间 16% → 5%（提亮）
+            //   白天 55% → 12%（浅底上"更白"才像玻璃反光）
+            drawRect(
+                brush = Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = if (light) 0.55f else 0.16f),
+                    0.55f to Color.White.copy(alpha = if (light) 0.12f else 0.05f),
+                    1f to Color.Transparent,
+                    startY = 0f,
+                    endY = h * 0.62f
+                ),
+                size = Size(w, h * 0.62f)
+            )
+            // 底缘一道极淡的暗边：ColorOS 16 的玻璃有"下厚上薄"的体积感，
+            // 少了这一笔，整块面会像一张贴在屏上的白纸。
+            drawRect(
+                brush = Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = if (light) 0.06f else 0.10f),
+                    startY = h * 0.72f,
+                    endY = h
+                ),
+                topLeft = Offset(0f, h * 0.72f),
+                size = Size(w, h * 0.28f)
+            )
+        }
+}

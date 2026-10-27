@@ -18,6 +18,10 @@ lifecycle = "2.8.7"
 coroutines = "1.8.1"
 composeBom = "2024.09.00"
 junit = "4.13.2"
+# Dimezis BlurView（JitPack，只发布在那里）。2.0.6 是最后一个
+# 「RenderScript 2.x 实现」版本：Android 12 以下走 RenderScript 软路径，
+# 正好是 API 24~30 设备（含用户的 Android 11 手表）唯一能用的路。
+blurview = "version-2.0.6"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,6 +44,7 @@ androidx-material = { group = "androidx.compose.material", name = "material" }
 androidx-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+blurview = { group = "com.github.Dimezis", name = "BlurView", version.ref = "blurview" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -369,7 +369,7 @@ private fun FineZoomTrack(
                     .height(trackH)
                     .align(Alignment.CenterStart)
                     .clip(PillShape)
-                    .background(Color.White.copy(alpha = 0.16f))
+                    .background(KeyPalette.track)
             )
             // ---- 已选段：从中点往滑块方向长（相对量的可视化）----
             if (fillW > 0.dp) {

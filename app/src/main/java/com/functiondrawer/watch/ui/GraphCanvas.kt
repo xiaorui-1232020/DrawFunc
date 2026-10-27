@@ -10,9 +10,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -27,8 +29,8 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import com.functiondrawer.watch.engine.Calc
 import com.functiondrawer.watch.engine.Curve
 import com.functiondrawer.watch.engine.GLineKind
 import com.functiondrawer.watch.engine.GPoint
@@ -67,7 +69,7 @@ data class CurveStyle(
 private class CurvePath(val functionId: Long, val path: Path, val colorIndex: Int)
 
 /** 曲线"画出来"的揭示动画时长（毫秒）。 */
-private const val REVEAL_MS = 520
+internal const val REVEAL_MS = 520
 
 /**
  * 绘图区。
@@ -153,7 +155,14 @@ fun GraphCanvas(
     /** 交点/极值点光晕的颜色（默认用曲线配色里的奶油黄，压在深色曲线上很跳）。 */
     highlightColor: Color = CurvePalette[6],
     /** 工具选点/拖点用的颜色（用强调蓝，和曲线配色的黄分得开）。 */
-    secondaryHighlightColor: Color = CurvePalette[0]
+    secondaryHighlightColor: Color = CurvePalette[0],
+    /**
+     * 揭示动画**播完**时回调一次。
+     *
+     * 上层（`GraphRoute`）用它做两件事：解锁抽屉拖动（用户反馈 3）、
+     * 以及补一张背景（动画播完时画布上才是完整曲线，见那边的注释）。
+     */
+    onRevealFinished: () -> Unit = {}
 ) {
     // 只在采样结果变化时重建 Path。手势期间 viewport 每帧都在变，
     // 但 plot 不变，所以这里不会重复分配。
@@ -161,14 +170,41 @@ fun GraphCanvas(
 
     // 揭示进度：0 = 还没画，1 = 画完。默认 1（不动画时就是完整显示）。
     val reveal = remember { Animatable(1f) }
-    LaunchedEffect(revealIds) {
-        if (revealIds.isNotEmpty()) {
-            reveal.snapTo(0f)
-            reveal.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = REVEAL_MS, easing = FastOutSlowInEasing)
-            )
+
+    /**
+     * 这一批 id 的揭示动画**已经开始**的记号（用户反馈 2 / 5）。
+     *
+     * ⚠️ 不能只靠 `reveal.snapTo(0f)`：`LaunchedEffect` 在**这一帧画完之后**才跑，
+     * 于是新函数会先按完整路径闪一帧，然后才从头画出来。
+     * 所以只要 [revealIds] 和它不一致，绘制阶段就一律按 0 进度算；
+     * 等下面的 effect 真的启动动画（先 snapTo(0)）之后才交回给 [reveal]。
+     */
+    val activeRevealIds = remember { mutableStateOf(emptySet<Long>()) }
+    val currentOnRevealFinished by rememberUpdatedState(onRevealFinished)
+
+    /**
+     * 要揭示的那批函数**已经有采样结果**了没有。
+     *
+     * 没有就等待（绘制阶段一直按 0 进度画，不会先闪出来）：
+     * 否则动画会在"一条都画不出来"的画布上空跑 520ms，
+     * 等采样结果到了动画已经播完，用户看到的仍然是"整条直接出现"。
+     */
+    val revealPathsReady = paths.any { cp -> cp.functionId in revealIds }
+    LaunchedEffect(revealIds, revealPathsReady) {
+        if (revealIds.isEmpty()) {
+            activeRevealIds.value = emptySet()
+            reveal.snapTo(1f)
+            return@LaunchedEffect
         }
+        if (!revealPathsReady) return@LaunchedEffect
+        reveal.snapTo(0f)
+        activeRevealIds.value = revealIds
+        reveal.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = REVEAL_MS, easing = FastOutSlowInEasing)
+        )
+        // 播完再回调：上层这时才解锁抽屉、补背景（画布此刻才是完整曲线）。
+        currentOnRevealFinished()
     }
 
     /**
@@ -295,7 +331,7 @@ fun GraphCanvas(
      * 现在只在真圆屏上套那套弦宽，方屏/手机只留矩形安全内缩。
      * **圆表分支一个字节都没变**（`isRound == true` 走的是原来那条路）。
      */
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
 
     Canvas(modifier = modifier) {
         // 网格与坐标轴永远按当前视口画，所以它们永远是"即时跟随手指"的基准。
@@ -340,7 +376,13 @@ fun GraphCanvas(
             val delta = src.screenDeltaTo(viewport)
             val k = delta.k.toFloat()
             val sw = if (!delta.isIdentity() && k > 1e-6f) strokeCurve / k else strokeCurve
-            val progress = reveal.value
+            // 动画还没启动的那一帧强制按 0 画（见 `activeRevealIds`）：
+            // 不能拿 `reveal.value` 的初值 1 去画，否则就是"先完整闪一下"。
+            val progress = when {
+                revealIds.isEmpty() -> 1f
+                revealIds != activeRevealIds.value -> 0f
+                else -> reveal.value
+            }
 
             for (cp in paths) {
                 val style = curveStyles[cp.functionId] ?: CurveStyle(
@@ -1544,12 +1586,16 @@ private fun DrawScope.drawCartesianLabels(
     // lastRight 是**当前帧**的局部变量，不进 `remember`：它依赖当前视口，
     // 缓存了滑动时就会拿上一帧的占位去判这一帧。
     var lastRight = Float.NEGATIVE_INFINITY
-    var v = ceil(vp.worldLeft / step) * step
+    // 刻度标签用「整数下标 × 步长」的精确十进制值（见 `Calc.formatTick`），
+    // 不再靠 Double 累加 —— 否则 16 位精度下会印出 0.2000000000000001 这种尾巴。
+    var tickIndex = ceil(vp.worldLeft / step).toLong()
     var guard = 0
-    while (v <= vp.worldRight && guard++ < MAX_LABEL_TICKS) {
+    while (guard++ < MAX_LABEL_TICKS) {
+        val v = tickIndex * step
+        if (v > vp.worldRight) break
         // 0 不标：原点是坐标轴的交点，标上去只会和轴线打架
         if (abs(v) > step * 1e-6) {
-            val text = formatNumber(v)
+            val text = Calc.formatTick(tickIndex, step)
             // **实测**字宽：`1` 和 `-1000` 差三倍，按位数估会估出两个都放不下的假象
             val halfW = paint.measureText(text) / 2f
             // 迟滞：上一次这个刻度值画过没有（见 LabelSticky）。画过的用宽松阈值，
@@ -1604,7 +1650,7 @@ private fun DrawScope.drawCartesianLabels(
                 sticky.xRow.remove(v)
             }
         }
-        v += step
+        tickIndex++
     }
     // 清掉已经不在可见范围内的刻度值：换档/平移会不断产生新值，不清的话集合会一直长。
     sticky.prune(sticky.xRow, vp.worldLeft, vp.worldRight, step)
@@ -1638,11 +1684,13 @@ private fun DrawScope.drawCartesianLabels(
     val yLoColumn = yRange?.loPx ?: return
     val yHiColumn = yRange.hiPx
     var lastTop = Float.POSITIVE_INFINITY
-    var yv = ceil(vp.worldBottom / step) * step
+    var yTickIndex = ceil(vp.worldBottom / step).toLong()
     guard = 0
-    while (yv <= vp.worldTop && guard++ < MAX_LABEL_TICKS) {
+    while (guard++ < MAX_LABEL_TICKS) {
+        val yv = yTickIndex * step
+        if (yv > vp.worldTop) break
         if (abs(yv) > step * 1e-6) {
-            val text = formatNumber(yv)
+            val text = Calc.formatTick(yTickIndex, step)
             val tw = paint.measureText(text)
             // 刻度线自己的屏幕高度（判"还在不在**范围**里"要用它，所以只算一次）
             val tickY = vp.toScreenY(yv)
@@ -1713,7 +1761,7 @@ private fun DrawScope.drawCartesianLabels(
                 sticky.yColumn.remove(yv)
             }
         }
-        yv += step
+        yTickIndex++
     }
     sticky.prune(sticky.yColumn, vp.worldBottom, vp.worldTop, step)
 }
@@ -1775,7 +1823,7 @@ private fun DrawScope.drawPolarLabels(
         val radiusPx = (k * step / vp.unitsPerPixel).toFloat()
         if (!radiusPx.isFinite()) break
         if (radiusPx > maxRadius) break
-        val text = formatNumber(k * step)
+        val text = Calc.formatTick(k.toLong(), step)
         val halfW = paint.measureText(text) / 2f
         val ringX = center.x + radiusPx
         // 迟滞按"环半径值"记（极坐标这一行和笛卡尔 x 行是两条独立的判定链）

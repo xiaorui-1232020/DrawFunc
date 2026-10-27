@@ -426,13 +426,29 @@ internal class RowSwipeDelete(
      *   同一个 233dp 圆表上 `-5~5` 和 `-0.5~0.5` 量出来的滑轨不是同一条 ——
      *   写死比例就会在窄文字时把滑轨划进删除区，而那正是"误删"。
      *   详细的划分表与三块屏的 dp 数见 `PlotMetrics` 末尾那一节。
+     *
+     * @param yieldRightToPager 往**右**拖时要不要把这一串让给抽屉的 Pager。
+     *
+     *   用户原话："函数条右划可以滑动界面。" 这一行原来的做法是"整条水平轴归我"
+     *   （`claimOpposite = true`，见 [awaitOneWayDrag]），于是手指按在函数行上往右划，
+     *   行自己把位移全吃掉了、Pager 收不到 → **界面纹丝不动**。
+     *
+     *   打开这一条之后：往右越过触摸容差时本手势**零消费退出**（和 `claimOpposite`
+     *   相反的那条路），同一串事件原样留在事件流里，Pager 就能跟手翻页。
+     *   往左照旧是删除（方向对，认领）。
+     *
+     *   为什么只在抽屉里打开（`LocalDrawerController.current != null`）：
+     *   没有 Pager 时（单独用这一屏），往右让出去也没人接，那就必须留着
+     *   原来的 `claimOpposite` —— 否则"往右拖一下"会被行内 `combinedClickable`
+     *   当成"点了一下这一行"（打开编辑器/属性页）。
      */
     fun gesture(
         rowKey: Any?,
         rowWidthPx: Float,
-        skipIfDownConsumed: Boolean = false
+        skipIfDownConsumed: Boolean = false,
+        yieldRightToPager: Boolean = false
     ): Modifier =
-        Modifier.pointerInput(rowKey, rowWidthPx, skipIfDownConsumed) {
+        Modifier.pointerInput(rowKey, rowWidthPx, skipIfDownConsumed, yieldRightToPager) {
             awaitEachGesture {
                 // ---- 新的一串手势：位移归零（**但甩出期间绝不归零**）----
                 //
@@ -471,7 +487,11 @@ internal class RowSwipeDelete(
                     //   2. 认领之后 [onDrag]/[onEnd] 拿到的仍是**带符号**累计值，
                     //      往右是正数，[swipeDeleteReached] 一定判否 → 行弹回原位、
                     //      不删（语义还是"只有往左才删"）。
-                    claimOpposite = true,
+                    //
+                    // ⚠️ 在抽屉里（`yieldRightToPager`）**不认领**"往右"那一半：
+                    // 用户要求"函数条右划可以滑动界面"。往右越过容差时零消费退出，
+                    // 同一串事件留在流里，Pager 就能跟手翻页（详见参数说明）。
+                    claimOpposite = !yieldRightToPager,
                     // ---- 上下滑之后再左右滑，不许删（#4，本轮修的误删）----
                     //
                     // 用户原话："我在列表这里上下滑动之后，如果再左右滑动，会唤起这个
@@ -566,8 +586,9 @@ internal fun rememberRowSwipeDelete(
  * **只要在 ⚙ 上横向拖过触摸容差（≈24px）短按就没了** —— 而"拖了十几像素、又没滑到 `+`"
  * 在用户看来就是"我点了一下设置，没反应"。
  *
- * 所以这个原语与它**相反**：**在真的滑到另一颗键之前，一个字节都不消费。**
- * 按钮的短按、长按、线圈（`HoldToConfirm` 完全不看移动事件）在这期间全都照旧。
+ * 所以这个原语只在**真的越过触摸容差之后**才消费：容差以内一个字节都不消费 ——
+ * 按钮的短按、长按、线圈（`HoldToConfirm` 完全不看移动事件）全都照旧。
+ * 越过容差之后必须消费，否则 Pager 会把这一串当成横滑翻页（见下面语义第 3 条）。
  *
  * ## 语义（四句话）
  *
@@ -579,7 +600,11 @@ internal fun rememberRowSwipeDelete(
  *      （`positionChangeIgnoreConsumed()`，和 [awaitOneWayDrag] **同一把尺子** ——
  *      别人消费了这一帧也不影响我们算"手指现在在哪"），再拿手指的**绝对 x**
  *      问一句 [toolbarMenuCrossedToOtherKey]；第一次为真 → `onCross()`；
- *   4. 从达成的那一帧起**每帧 `consume()`**：这一次手势归工具条 ——
+ *      同时**横向越过触摸容差就认领**（此后每帧 `consume()`），把 Pager 挡在门外 ——
+ *      否则"从 ⚙ 划向 `+`"的路上界面会先跟着平移（用户报的
+ *      "设置键划向加号键不能移动界面"）；越过的若是**竖向**容差，
+ *      则整串放弃、零消费，留给列表滚动 / 顶部下滑；
+ *   4. 认领之后**每帧 `consume()`**：这一次手势归工具条 ——
  *      按钮的点击随之取消（`waitForUpOrCancellation` 在 Final 阶段看到"被消费"就放弃），
  *      所以"滑到另一颗键、停在那里抬手"**不会**顺带触发那颗键自己的点击
  *      （滑到 `+` 上松手不会开编辑器、滑到 🗑 上松手不会清屏）。
@@ -619,17 +644,40 @@ internal suspend fun AwaitPointerEventScope.awaitKeyToKeySwipe(
     if (startedAt == ToolbarKeySide.NONE) return
 
     var total = 0f
+    /** 竖向累计位移：只用于"这一串被另一个轴拿走"的判定（见下面的 `claimed`）。 */
+    var totalY = 0f
     var fired = false
+    /**
+     * 本手势是否已经**认领**（开始 `consume()`）。
+     *
+     * ⚠️ 本轮新增，修的是用户报的"设置键划向加号键**不能移动界面**"：
+     * 原来只有"滑到另一颗键"之后才消费，那之前 Pager 会当成横滑翻页 ——
+     * 于是"从 ⚙ 往 `+` 划"的路上**界面先跟着平移**，划过一半才弹出撤销菜单。
+     * 现在的划分是：
+     *   * 手指**没越过触摸容差** → 零消费，短按/长按照旧；
+     *   * 越过**横向**容差 → 立刻认领（每帧 consume），Pager 从这一帧起就收不到位移；
+     *   * 越过的是**竖向**容差（`oneWayDragLostToOtherAxis`）→ 直接放弃、零消费，
+     *     把这一串留给列表滚动 / 顶部下滑。
+     */
+    var claimed = false
+    val slop = viewConfiguration.touchSlop
     while (true) {
         val event = awaitPointerEvent()
         val change = event.changes.firstOrNull { it.id == down.id } ?: break
         val isUp = change.changedToUpIgnoreConsumed()
 
-        // 这一帧的横向位移（抬手那一帧也算上：有些设备会把最后一段位移并进 up 事件）。
+        // 这一帧的位移（抬手那一帧也算上：有些设备会把最后一段位移并进 up 事件）。
         // ⚠️ `positionChangeIgnoreConsumed()` 而不是 `positionChange()`：后者在
         // "这一帧已被别人消费"时返回 0，而"手指现在在哪"这件事**不该**受别人是否消费影响
         // （第二屏右边缘那条边缘手势就会每帧消费这一串，见 `FunctionsScreen`）。
-        total = oneWayDragStep(total, change.positionChangeIgnoreConsumed().x)
+        val delta = change.positionChangeIgnoreConsumed()
+        total = oneWayDragStep(total, delta.x)
+        totalY = oneWayDragStep(totalY, delta.y)
+
+        if (!claimed) {
+            if (oneWayDragLostToOtherAxis(total, totalY, slop)) break
+            if (abs(total) >= slop) claimed = true
+        }
 
         if (!fired && toolbarMenuCrossedToOtherKey(
                 startedAt = startedAt,
@@ -641,9 +689,8 @@ internal suspend fun AwaitPointerEventScope.awaitKeyToKeySwipe(
             fired = true
             onCross()
         }
-        // 达成之后才消费：这一次手势归工具条（按钮的点击随之取消）。
-        // 达成之前一个字节都不消费 —— 短按 / 长按 / 线圈全部照旧。
-        if (fired) change.consume()
+        // 认领之后每帧消费：这一次手势归工具条（按钮的点击随之取消，Pager 也不再翻页）。
+        if (fired || claimed) change.consume()
 
         if (isUp) break
     }

@@ -38,9 +38,13 @@ class ToolFlowTest {
     // ---- 目录本身 ----
 
     @Test
-    fun `五栏都有小标题且工具不重复`() {
-        assertEquals(5, ToolSection.entries.size)
-        assertEquals(listOf("基本工具", "度量", "变换", "作图", "直线"), ToolSection.entries.map { it.title })
+    fun `七栏都有小标题且工具不重复`() {
+        // 原本是 5 栏；后面按用户要求往下追加了「圆」「圆锥曲线」两栏。
+        assertEquals(7, ToolSection.entries.size)
+        assertEquals(
+            listOf("基本工具", "度量", "变换", "作图", "直线", "圆", "圆锥曲线"),
+            ToolSection.entries.map { it.title }
+        )
         val all = FunctionTool.entries.map { it.label }
         assertEquals("工具不能重名", all.size, all.toSet().size)
         // 每一栏至少有一个工具（界面上标题下面不能是空的）

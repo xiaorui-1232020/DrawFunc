@@ -1,5 +1,10 @@
 // 手表 UI 大量用到实验性接口，文件级统一 OptIn。
-@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+// `Foundational` 是给 `combinedClickable` 用的（3.34 的诊断长按）：
+// 它在当前 Compose 版本里仍是 @ExperimentalFoundationApi。
+@file:OptIn(
+    androidx.compose.ui.ExperimentalComposeUiApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
+)
 
 package com.functiondrawer.watch.ui
 
@@ -8,11 +13,17 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.SystemClock
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,7 +59,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +67,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.functiondrawer.watch.ui.theme.PillShape
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlin.math.round
@@ -205,6 +216,15 @@ private const val LIST_TOP = TOOLBAR_TOP + TOOLBAR_H + LIST_GAP
 private const val LIST_BOTTOM = 0.90f
 
 /**
+ * 「您已进入开发者模式」那条提示离屏幕底边的距离（占短边）。
+ *
+ * 取的就是 `GraphScreen` 里那条 toast 的 `SWIPE_UP_ZONE_H + BOTTOM_PILL_GAP`
+ * （0.17 + 0.014 = 0.184）—— 用户要求"样式与 `GraphState.showToast` 的浮层一致"，
+ * 位置也算在这一套里。那两处常量是人家的私有值，这里抄一份，不为了共用去改 `GraphScreen`。
+ */
+private const val DEV_HINT_BOTTOM_PAD = 0.184f
+
+/**
  * 行高（占**短边**，0.115 × 233dp ≈ 26.8dp）—— **和设置页逐字相同**。
  *
  * 用户明确说过"行高/字号/胶囊尺寸仍按短边缩放，别改"，所以它是"控件尺寸"那一类。
@@ -278,11 +298,13 @@ private class AboutItem(val key: String, val kind: Kind, val text: String = "") 
 fun AboutScreen(
     metrics: WatchMetrics,
     onBack: () -> Unit,
-    rotary: Flow<Float> = emptyFlow()
+    rotary: Flow<Float> = emptyFlow(),
+    /** 背后有没有模糊背景可透（和设置页同一条规则）。 */
+    backdropVisible: Boolean = false
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
 
     // 名字 / 版本号 / Version Code / 图标都只读一次：它们是**进程级常量**，
     // 不会因为用户点了什么而变，所以不值得每次都问一遍 PackageManager。
@@ -297,22 +319,65 @@ fun AboutScreen(
         runCatching { drawableToBitmap(drawable, px) }.getOrNull()
     }
 
+    // ---- 模糊背板诊断（3.34）----
+    //
+    // 用户连续两轮都在问同一个问题："到底有没有正确保存和加载那张模糊图？"
+    // 之前没有任何办法在**真机上**看到答案（没有 adb、没有模拟器），
+    // 只能靠改一版、装一版、再看一眼截图猜。
+    //
+    // 这里给一个现场读数：**长按"版本"那一行**把它翻出来 / 收起。
+    // 内容是 [blurBackdropInfo] 给的现场读数 ——
+    // 图在不在、多大、什么时候做的、用的什么尺寸和主题签名。
+    // 手表的屏幕放不下大段文字，所以压成一行一行的短句。
+    var showBackdropInfo by remember { mutableStateOf(false) }
+
+    // ---- 开发者模式：连点版本号 7 下（相邻两次间隔超过 2 秒就重新计数）----
+    //
+    // 不弹系统 Toast：手表上系统 Toast 一闪就没了，而且和 App 自己的提示条不是一套长相。
+    // 这里用和 `GraphState.showToast` 同一种浮出胶囊，2 秒后自己消失。
+    var versionTapCount by remember { mutableStateOf(0) }
+    var lastVersionTapAt by remember { mutableStateOf(0L) }
+    var developerHint by remember { mutableStateOf(false) }
+
+    fun onVersionTap() {
+        val now = SystemClock.elapsedRealtime()
+        versionTapCount = if (now - lastVersionTapAt > 2_000L) 1 else versionTapCount + 1
+        lastVersionTapAt = now
+        if (versionTapCount >= 7) {
+            versionTapCount = 0
+            AppPrefs.setDeveloperMode(context, true)
+            developerHint = true
+        }
+    }
+
+    LaunchedEffect(developerHint) {
+        if (developerHint) {
+            delay(2_000L)
+            developerHint = false
+        }
+    }
+
     // 列表内容：**顺序就是版面**（图标 → 名字 → 版本 → Version Code → 空一排 →
     // dsh → 开发者 → bug反馈）。加行/改文案只动这一处。
-    val items = remember(info) {
+    val items = remember(info, showBackdropInfo) {
         listOf(
             AboutItem("icon", AboutItem.Kind.ICON),
             AboutItem("name", AboutItem.Kind.TITLE, info.name),
             AboutItem("version", AboutItem.Kind.MUTED, "版本 ${info.versionName}"),
             AboutItem("code", AboutItem.Kind.MUTED, "Version Code ${info.versionCode}"),
-            AboutItem("gap", AboutItem.Kind.GAP),
-            AboutItem("dsh", AboutItem.Kind.MUTED, "本应用使用 dsh 开发"),
+            AboutItem("dsh", AboutItem.Kind.MUTED, "本应用使用AI辅助开发"),
             AboutItem("dev", AboutItem.Kind.BODY, "开发者 春羽"),
             // ---- 本轮新增：用户要的"应用列表底部加一行字" ----
             // ⚠️ 它用的是 [AboutItem.Kind.FEEDBACK] 而不是 MUTED：这一行在圆表上装不下，
             //    要允许它自动折成两行（用户原话："如果显示全就不管，显示不全就自动换行"）。
             AboutItem("feedback", AboutItem.Kind.FEEDBACK, FEEDBACK_TEXT)
-        )
+        ) + if (showBackdropInfo) {
+            // 诊断行：只在长按版本号之后出现，平时不占版面。
+            // 3.36 起毛玻璃由 BlurView 负责，诊断内容换成"这一台实际走的是哪条路"。
+            listOf(AboutItem("backdrop", AboutItem.Kind.FEEDBACK, blurBackdropInfo()))
+        } else {
+            emptyList()
+        }
     }
 
     // 入场的总开关：进这一屏后置 true，各行按序号错开淡入（同设置页那套）。
@@ -337,7 +402,14 @@ fun AboutScreen(
             // 上一屏还在淡出，根节点没有背景就会透出来（"漏底"）。
             // 取 `MaterialTheme.colors.background`（本主题里就是 #000000）而不是写死一个黑，
             // 将来换主题时它和最外层外壳一起变。
-            .background(MaterialTheme.colors.background)
+            .background(
+                // 回到 3.45 的写法：有背景可透 → 62% 底色；否则实色。
+                if (backdropVisible || LocalGlassTheme.current) {
+                    MaterialTheme.colors.background.copy(alpha = GLASS_PAGE_MASK_ALPHA)
+                } else {
+                    MaterialTheme.colors.background
+                }
+            )
     ) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
         val listTopPx = with(density) { geometry.sy(LIST_TOP).toPx() }
@@ -457,10 +529,57 @@ fun AboutScreen(
                         geometry = geometry,
                         isRound = isRound,
                         index = index,
-                        entered = entered
+                        entered = entered,
+                        // 版本那一行长按 = 翻出模糊背板的诊断读数（见上面 `showBackdropInfo`）。
+                        // 其它行长按不做任何事（传 null，连手势节点都不挂）。
+                        onLongClick = if (item.key == "version") {
+                            { showBackdropInfo = !showBackdropInfo }
+                        } else {
+                            null
+                        },
+                        // 单击：只有版本号那一行要接（开发者模式的连点入口）
+                        onClick = when (item.key) {
+                            "version" -> ::onVersionTap
+                            else -> null
+                        }
                     )
                 }
             }
+        }
+
+        // ---- ③ 「您已进入开发者模式」：和图像界面那条 toast 同款浮出胶囊 ----
+        //
+        // 这一屏拿不到 `GraphState`，所以自己做一个**只有一条提示**的浮层：
+        // 同样的 `KeyPalette.accent` 底色、`FloatPill` 形状、定高 [FLOAT_PILL_H]、
+        // 底部居中 + 同一个离底边的距离；2 秒后自己淡出（计时在 `developerHint` 那个 effect 里）。
+        AnimatedVisibility(
+            visible = developerHint,
+            enter = fadeIn(animationSpec = tween(durationMillis = 180)) +
+                slideInVertically(
+                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
+                ) { full -> full / 2 },
+            exit = fadeOut(animationSpec = tween(durationMillis = 150)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = metrics.sizeDp * DEV_HINT_BOTTOM_PAD)
+                .width(
+                    bandWidth(
+                        metrics = metrics,
+                        geometry = geometry,
+                        isRound = isRound,
+                        yTop = 1f - DEV_HINT_BOTTOM_PAD - FLOAT_PILL_H,
+                        yBottom = 1f - DEV_HINT_BOTTOM_PAD,
+                        arcMargin = 0.92f
+                    )
+                )
+                .height(metrics.sizeDp * FLOAT_PILL_H)
+        ) {
+            FloatPill(
+                text = "您已进入开发者模式",
+                container = KeyPalette.accent,
+                metrics = metrics,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }
@@ -586,7 +705,9 @@ private fun AboutTextRow(
     geometry: ScreenGeometry,
     isRound: Boolean,
     index: Int,
-    entered: Boolean
+    entered: Boolean,
+    onLongClick: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
 ) {
     // 应用名是这一屏最重要的信息（`fontTitle` + 纯白），其余按"是不是收尾句"分两档：
     // 开发者那行纯白收尾，版本号那几行压到 80% 白（`KeyPalette.textMuted`）做出层次。
@@ -613,6 +734,21 @@ private fun AboutTextRow(
         color = KeyPalette.normal,
         shape = PillShape,
         modifier = Modifier
+            // 毛玻璃：顶部光泽 + 1dp 渐变描边（昼夜两套参数由 glassSurface 内部判断）
+            .then(if (LocalGlassTheme.current) Modifier.glassSurface(PillShape) else Modifier)
+            // 长按（可空）：只有"版本"那一行挂得上，其余行传 null。
+            // 用 `combinedClickable` + 空 `onClick`：只需要长按，但手势节点必须
+            // 同时声明点击，否则长按的判定起点会和列表滚动打架。
+            .then(
+                if (onLongClick != null || onClick != null) {
+                    Modifier.combinedClickable(
+                        onClick = { onClick?.invoke() },
+                        onLongClick = onLongClick
+                    )
+                } else {
+                    Modifier
+                }
+            )
             .width(geometry.rowWidth(metrics, widthFraction, isRound))
             // 换行那一行：`heightIn(min = 行高)`，装得下就是一行的高度、装不下跟着内容长
             .then(

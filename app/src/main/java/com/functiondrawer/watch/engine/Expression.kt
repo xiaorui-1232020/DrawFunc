@@ -232,7 +232,12 @@ class Expression internal constructor(
             callStack: List<String>,
             budget: CallBudget
         ): Expression {
-            val tokens = Lexer(source).tokenize()
+            // 输入侧支持 LaTeX（`\frac{1}{2}`、`\sqrt{x}`、`\pi` …）：
+            // 先翻译成普通表达式，再走原来的词法/语法。没有 `\` / `{` 时
+            // [Latex.expand] 原样返回，所以老写法一个字符都不动。
+            // 放在这一层（而不是 [compile]）是为了让**被调用的用户函数体**
+            // 同样能写 LaTeX。
+            val tokens = Lexer(Latex.expand(source)).tokenize()
             val parser = Parser(tokens, variables, degrees, parameters, callables, callStack, budget)
             val root = parser.parse()
             return Expression(root, variables, degrees, parameters, callables)
@@ -249,12 +254,15 @@ class Expression internal constructor(
             parameters: ParameterSet = ParameterSet.DEFAULT,
             callables: CallableSet = CallableSet.EMPTY
         ): Expression {
-            val idx = indexOfTopLevelEquals(source)
+            // 先翻 LaTeX 再找等号：`\frac{x^2}{4}=1` 里那个 `=` 藏在一堆
+            // 花括号后面，直接找会先撞上 `\frac` 的参数。
+            val plain = Latex.expand(source)
+            val idx = indexOfTopLevelEquals(plain)
             return if (idx < 0) {
-                compile(source, variables, degrees, parameters, callables)
+                compile(plain, variables, degrees, parameters, callables)
             } else {
-                val lhs = source.substring(0, idx)
-                val rhs = source.substring(idx + 1)
+                val lhs = plain.substring(0, idx)
+                val rhs = plain.substring(idx + 1)
                 if (rhs.isBlank()) throw ExpressionException("等号右边是空的", idx)
                 compile("($lhs)-($rhs)", variables, degrees, parameters, callables)
             }
@@ -498,6 +506,11 @@ internal class Parser(
         //    隐函数里用户很自然会写 xy 表示 x*y、2πx 之类。
         trySplitIntoProduct(name)?.let { return it }
 
+        // 7) 再兜一层：函数名和变量粘在一起（`sinx`、`asinx`）。
+        //    用户原话："a·sinx 在没打乘号的时候被识别成 asinx，很影响体验。"
+        //    和上一条一样，只把能确定拆开的写法救回来，拆不动就照旧报错。
+        trySplitGluedFunction(name)?.let { return it }
+
         throw ExpressionException(
             "不认识的名字 '$name'。" + hintFor(name),
             t.pos
@@ -680,6 +693,20 @@ internal class Parser(
         if (arity.first == arity.last) "${arity.first}" else "${arity.first}~${arity.last}"
 
     /**
+     * 单个字符能不能当作一个原子（采样变量 / 可绑定参数 / 常量）。
+     *
+     * 抽出来是给 [trySplitIntoProduct] 和 [trySplitGluedFunction] 共用的：
+     * 后者也要判断"函数名前面那几个字母是不是合法的乘积"。
+     */
+    private fun nameAtom(one: String): Node? {
+        if (one.length != 1) return null
+        val varIndex = variables.indexOf(one)
+        if (varIndex >= 0) return Node.Var(varIndex)
+        parameters.value(one)?.let { return Node.Const(it) }
+        return MathFns.constantOf(one)?.let { Node.Const(it) }
+    }
+
+    /**
      * 把 `xy` 拆成 x*y；只要有一个字符既不是采样变量、也不是可绑定参数或常量，
      * 就返回 null（外层会给"不认识的名字"报错）。
      *
@@ -690,15 +717,66 @@ internal class Parser(
         if (name.length < 2) return null
         var node: Node? = null
         for (ch in name) {
-            val one = ch.toString()
-            val child: Node = when {
-                variables.contains(one) -> Node.Var(variables.indexOf(one))
-                else -> parameters.value(one)?.let { Node.Const(it) }
-                    ?: MathFns.constantOf(one)?.let { Node.Const(it) }
-                    ?: return null
-            }
+            val child = nameAtom(ch.toString()) ?: return null
             node = if (node == null) child else Node.Mul(node, child)
         }
         return node
+    }
+
+    /**
+     * 把「函数名和变量粘在一起」的写法拆开：`sinx` → `sin(x)`、`asinx` → `a·sin(x)`。
+     *
+     * 用户原话："很尴尬的情况就是 a·sinx 在没打乘号的时候被识别成 asinx，
+     * 很影响体验。" 词法器把连着的字母读成**一个** IDENT（[Lexer.readIdent]），
+     * 所以 `asinx` 到这一层只剩一个"不认识的名字"。键盘侧遇到函数键时已经会
+     * 自动补 `*`（见 `KeyboardModel` 的乘号规则），但用户手打字母页时没有这个信号，
+     * 只能在这里按"函数名前缀"再拆一次。
+     *
+     * ## 拆分顺序（决定歧义怎么判）
+     *
+     * 1. **前缀越长越优先**：`asinx` 拆成 `a · sin(x)` 而不是 `asin(x)` ——
+     *    用户抱怨的正是"被识别成 asinx"，而 `asin` 恰好也是内置名；
+     *    真要反三角，键盘上有 `asin` 键（会插 `asin()`）或直接写 `asin(x)`。
+     * 2. 前缀必须本身就是合法的乘积（每个字符都是变量 / 可绑定参数 / 常量），
+     *    所以 `foo2x` 这种不会被硬拆。
+     * 3. 前缀为空也算一种（`sinx` → `sin(x)`），放在最后兜底。
+     * 4. 函数名取**最长匹配**：`sinhx` 是 `sinh(x)`，不是 `sin(hx)`。
+     *
+     * 只认"能吃 1 个参数"的函数：`atan2` / `pow` / `root` 这类没有单参形态，
+     * 粘在字母后面仍然报"要写括号"（见 [hintFor]），不会被猜成别的东西。
+     */
+    private fun trySplitGluedFunction(name: String): Node? {
+        if (name.length < 3) return null
+        var withPrefix: Node? = null
+        for (k in 1 until name.length) {
+            val prefixNode = trySplitIntoProduct(name.substring(0, k))
+                ?: nameAtom(name.substring(0, k))
+                ?: continue
+            val call = gluedCall(name.substring(k)) ?: continue
+            // 只留最后一个成功的 k —— 也就是**最长**的那段前缀。
+            withPrefix = Node.Mul(prefixNode, call)
+        }
+        if (withPrefix != null) return withPrefix
+        // 没有合法前缀：整串就是"函数名 + 参数"（sinx / cosx / lhx…）
+        return gluedCall(name)
+    }
+
+    /** [trySplitGluedFunction] 的后半段：把 `sinx` 这种拆成 `sin(x)`。 */
+    private fun gluedCall(text: String): Node? {
+        // 函数名最长优先（`sinh` 在 `sin` 之前），最短也要 2 个字符（ln/lg/lb）。
+        for (len in text.length - 1 downTo 2) {
+            val fn = text.substring(0, len)
+            val fnName = when {
+                MathFns.isFunction(fn) -> fn
+                MathFns.isFunction(fn.lowercase()) -> fn.lowercase()
+                else -> continue
+            }
+            val arity = MathFns.arityOf(fnName) ?: continue
+            if (!arity.contains(1)) continue
+            val argText = text.substring(len)
+            val arg = trySplitIntoProduct(argText) ?: nameAtom(argText) ?: continue
+            return makeCall(fnName, listOf(arg))
+        }
+        return null
     }
 }

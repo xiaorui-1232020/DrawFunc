@@ -31,6 +31,19 @@ const val SAVES_DIR_HINT = "files/saves"
  */
 object FunctionFileStore {
 
+    /**
+     * 教程期间被「名义删除」的文件（绝对路径）。
+     *
+     * 第 31 步要让用户真的按住垃圾桶把刚存的 `test` 删掉，可教程中途退出时
+     * 那个文件还得**原样还回来** —— 真删盘就还不回来了。所以教程期间只把它
+     * 从列表里拿掉（[list] 跳过这些路径），盘上的文件一直留着：
+     *   * 走完全程 → [dropStash] 这时才真删；
+     *   * 中途退出 → [unstash] 直接放回列表。
+     *
+     * 只在内存里，进程重启自然清空（那时磁盘上的文件本来就是完整的）。
+     */
+    private val stashedPaths: MutableSet<String> = mutableSetOf()
+
     /** 列表里的一行。`summary` 是从文件内容里数出来的（列表第二行的小字用它）。 */
     data class Entry(
         val file: File,
@@ -39,6 +52,25 @@ object FunctionFileStore {
         val modified: Long,
         val summary: FunctionFileFormat.Summary
     )
+
+    /** 把所有文件都真的删掉（教程走完全程时调一次）。 */
+    fun dropStash() {
+        for (path in stashedPaths) delete(File(path))
+        stashedPaths.clear()
+    }
+
+    /** 当前有没有「名义删除」还挂着的文件。 */
+    fun hasStash(): Boolean = stashedPaths.isNotEmpty()
+
+    /** 名义删除：只从列表里拿掉，不动磁盘。 */
+    fun stash(files: Collection<File>) {
+        files.forEach { stashedPaths += it.absolutePath }
+    }
+
+    /** 撤销名义删除：文件原样回到列表。 */
+    fun unstash() {
+        stashedPaths.clear()
+    }
 
     /** 保存目录（不保证存在；写入时会创建）。 */
     fun dir(context: Context): File =
@@ -55,18 +87,21 @@ object FunctionFileStore {
             dir(context).listFiles { f -> f.isFile && f.name.endsWith(FunctionFileFormat.EXTENSION) }
         }.getOrNull() ?: return emptyList()
 
-        return files.mapNotNull { f ->
-            runCatching {
-                val text = f.readText(Charsets.UTF_8)
-                Entry(
-                    file = f,
-                    baseName = FunctionFileFormat.displayName(f.name),
-                    bytes = f.length(),
-                    modified = f.lastModified(),
-                    summary = FunctionFileFormat.summarize(text)
-                )
-            }.getOrNull()
-        }.sortedByDescending { it.modified }
+        return files
+            // 教程里"名义删除"的那些不列出来（见 [stashedPaths]）
+            .filter { it.absolutePath !in stashedPaths }
+            .mapNotNull { f ->
+                runCatching {
+                    val text = f.readText(Charsets.UTF_8)
+                    Entry(
+                        file = f,
+                        baseName = FunctionFileFormat.displayName(f.name),
+                        bytes = f.length(),
+                        modified = f.lastModified(),
+                        summary = FunctionFileFormat.summarize(text)
+                    )
+                }.getOrNull()
+            }.sortedByDescending { it.modified }
     }
 
     /** 读出一个文件的正文。读不到（不存在 / 没权限 / 编码坏）返回 null。 */

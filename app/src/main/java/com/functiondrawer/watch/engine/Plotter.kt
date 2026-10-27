@@ -157,7 +157,8 @@ object Plotter {
         var px = 0.0
         while (px <= w) {
             args[0] = vp.toWorldX(px)
-            val y = f.evalArray(args)
+            // 按当前计算精度归零：绝对值小于精度阈值的 y 一律当作 0
+            val y = Calc.snap(f.evalArray(args))
             if (y.isFinite()) {
                 var sy = vp.toScreenY(y).toDouble()
                 if (sy < lo) sy = lo
@@ -207,8 +208,9 @@ object Plotter {
                 // 所以这里必须先换成弧度再喂给 cos/sin ——
                 // 否则会出现"表达式按度、几何按弧度"，画出来的图是错的。
                 val theta = if (degrees) t * MathFns.DEG_TO_RAD else t
-                val wx = r * cos(theta)
-                val wy = r * sin(theta)
+                // 两个分量都按精度归零（和显函数的 y 同一条规则）
+                val wx = Calc.snap(r * cos(theta))
+                val wy = Calc.snap(r * sin(theta))
                 fillScreen(vp, wx, wy, limit, p)
             }
         }
@@ -243,8 +245,9 @@ object Plotter {
         val args = DoubleArray(1)
         val pf = PointFn { t, p ->
             args[0] = t
-            val wx = fx.evalArray(args)
-            val wy = fy.evalArray(args)
+            // 参数方程的两个分量同样按精度归零
+            val wx = Calc.snap(fx.evalArray(args))
+            val wy = Calc.snap(fy.evalArray(args))
             if (!wx.isFinite() || !wy.isFinite()) {
                 p.valid = false
             } else {

@@ -18,10 +18,10 @@ package com.functiondrawer.watch.engine
  * UI 的输入框语义全都要跟着改；分开之后它们在建树阶段就折成 **常量**，
  * 于是 `Expression.eval` 的签名、求值热路径、UI 全都一行不用动。
  *
- * [DEFAULT_VALUE] = 1.0 是**临时占位**：现在没有任何界面能改它们的值，
- * 取 1.0（乘法与加法的单位元）才能让用户写下的 `a*x+b` 直接画成 `x+1`，
- * 而不是一写就报错。等用户说明用途之后，把真正的取值来源（滑块、动画、
- * 参数扫描……）接到这个类上即可 —— 编译期折常量这条链路不用再动。
+ * 取值来源**已经接好了**：`GraphState.sliders` 里每个可绑定参数各有一条滑动条，
+ * 拖动时实时重建 [ParameterSet] 再重采样曲线（见 `GraphState.parameters()`）。
+ * 没被任何滑动条覆盖的参数取 [DEFAULT_VALUE] = 1.0（乘法与加法的单位元），
+ * 这样用户写下的 `a*x+b` 在没调过滑块时也能直接画成 `x+1`，而不是一写就报错。
  */
 class ParameterSet(values: Map<String, Double> = emptyMap()) {
 

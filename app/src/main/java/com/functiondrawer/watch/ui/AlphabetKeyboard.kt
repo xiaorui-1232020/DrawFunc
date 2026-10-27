@@ -1,5 +1,4 @@
-// 手表 UI 大量用到实验性接口，文件级统一 OptIn。
-// ExperimentalComposeUiApi 是 LocalConfiguration.current.isScreenRound（判断圆屏）用的。
+// 手表 UI 大量用到实验性接口，文件级统一 OptIn（圆屏判断已改走 isRoundScreen）。
 @file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package com.functiondrawer.watch.ui
@@ -31,7 +30,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -208,7 +206,7 @@ fun AlphabetKeyboard(
     // 行高 / 行距是**控件尺寸**：继续按短边缩放（和数学键盘的按键同一档）。
     val rowHeight = metrics.sizeDp * ROW_H
     val rowGap = metrics.sizeDp * ROW_GAP
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
     val listState = rememberLazyListState()
 
     // 网格形状是常量（不随模式 / 文本变），取一次就够了。

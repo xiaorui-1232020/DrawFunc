@@ -44,13 +44,19 @@ import com.functiondrawer.watch.engine.intersect
  * **所有**工具都不会因为一次无效点击而退出，只是那几个工具是用户点名要求的。
  */
 
-/** 功能界面的五栏（每栏在界面上有个小标题）。 */
+/** 功能界面的七栏（每栏在界面上有个小标题）。 */
 enum class ToolSection(val title: String) {
     BASIC("基本工具"),
     MEASURE("度量"),
     TRANSFORM("变换"),
     CONSTRUCT("作图"),
-    LINE("直线")
+    LINE("直线"),
+
+    /** 圆（用户要求："给功能界面最底下加一个栏，名字叫圆"）。 */
+    CIRCLE("圆"),
+
+    /** 圆锥曲线（紧跟在圆后面）。 */
+    CONIC("圆锥曲线")
 }
 
 /** 选中的东西是什么。 */
@@ -320,6 +326,114 @@ enum class FunctionTool(
         "射线", ToolSection.LINE,
         listOf(needsPoint("点射线的起点"), needsPoint("点射线经过的另一个点")),
         hint = "点两个点（第一个是起点）"
+    ),
+
+    // ---- 第六栏：圆 ----
+    //
+    // 五种作图方式和 GeoGebra 的「圆」工具一一对应（用户点名要参照它的操作）。
+    // 产出都是**一条隐函数曲线**（见 `CircleConics.kt`），所以从这一栏做出来的圆
+    // 和普通函数一样出现在列表里、能显隐、能改色、能删除。
+
+    /** 圆（圆心与一点）：点圆心，再点圆上的一点。 */
+    CIRCLE_CENTER_POINT(
+        "圆心·点", ToolSection.CIRCLE,
+        listOf(needsPoint("点圆心"), needsPoint("点圆上的一点")),
+        hint = "点圆心，再点圆上一点"
+    ),
+
+    /**
+     * 圆（圆心与半径）：**先选圆心，再选两点或者一条线段**（用户原话）。
+     *
+     * 半径取"那两点之间的距离"或者"那条线段的长度"。选线段那一步在
+     * `GraphState.toolTap` 里特判（状态机本身只认点，见那里的说明）。
+     */
+    CIRCLE_CENTER_RADIUS(
+        "圆心·半径", ToolSection.CIRCLE,
+        listOf(
+            needsPoint("点圆心"),
+            needsPoint("点第一个半径端点（或直接点一条线段）"),
+            needsPoint("点第二个半径端点")
+        ),
+        hint = "先点圆心，再点两点或一条线段"
+    ),
+
+    /**
+     * 圆（半径与圆心）：点圆心之后**弹出键盘输入半径**。
+     *
+     * 半径是一个表达式（`2.5`、`d`、`d/2`…），所以能直接引用滑动条 ——
+     * 用户原话"这样还可以调用其他变量的值，比如设置 d 为半径"。
+     * 输入面板在 `GraphScreen` 里，状态机只负责收到"圆心"这一步。
+     */
+    CIRCLE_RADIUS_CENTER(
+        "半径·圆心", ToolSection.CIRCLE,
+        listOf(needsPoint("点圆心，下一步输入半径")),
+        hint = "点圆心，再输入半径"
+    ),
+
+    /** 圆（过三点）：三点确定一个圆。 */
+    CIRCLE_THREE_POINTS(
+        "过三点", ToolSection.CIRCLE,
+        listOf(
+            needsPoint("点圆上第一点"),
+            needsPoint("点圆上第二点"),
+            needsPoint("点圆上第三点")
+        ),
+        hint = "依次点三个点"
+    ),
+
+    /** 圆弧：圆心 + 起点 + 终点（逆时针从起点转到终点，和 GeoGebra 一致）。 */
+    CIRCLE_ARC(
+        "圆弧", ToolSection.CIRCLE,
+        listOf(
+            needsPoint("点圆心"),
+            needsPoint("点弧的起点"),
+            needsPoint("点弧的终点")
+        ),
+        hint = "点圆心、起点、终点"
+    ),
+
+    // ---- 第七栏：圆锥曲线 ----
+
+    /** 椭圆：两个焦点 + 椭圆上一点。 */
+    ELLIPSE(
+        "椭圆", ToolSection.CONIC,
+        listOf(
+            needsPoint("点第一个焦点"),
+            needsPoint("点第二个焦点"),
+            needsPoint("点椭圆上一点")
+        ),
+        hint = "点两个焦点，再点椭圆上一点"
+    ),
+
+    /** 圆锥曲线：过五点的任意圆锥曲线（和 GeoGebra 的「圆锥曲线」工具一样）。 */
+    CONIC_FIVE_POINTS(
+        "圆锥曲线", ToolSection.CONIC,
+        listOf(
+            needsPoint("点第一个点"),
+            needsPoint("点第二个点"),
+            needsPoint("点第三个点"),
+            needsPoint("点第四个点"),
+            needsPoint("点第五个点")
+        ),
+        hint = "依次点五个点"
+    ),
+
+    /** 抛物线：焦点 + 准线（先用「直线」工具画一条，再点它）。 */
+    PARABOLA(
+        "抛物线", ToolSection.CONIC,
+        listOf(needsPoint("点焦点"), needsLine("点准线（可以先用直线工具画一条）")),
+        hint = "点焦点，再点准线"
+    ),
+
+    /** 双曲线：两个焦点 + 曲线上一点。 */
+    HYPERBOLA(
+        "双曲线", ToolSection.CONIC,
+        listOf(
+            needsPoint("点第一个焦点"),
+            needsPoint("点第二个焦点"),
+            needsPoint("点曲线上一点")
+        ),
+        hint = "点两个焦点，再点曲线上一点"
     );
 
     /**

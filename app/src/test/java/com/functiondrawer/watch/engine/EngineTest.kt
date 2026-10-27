@@ -54,11 +54,44 @@ class ExpressionTest {
     }
 
     @Test
+    fun `LaTeX 语法可以求值`() {
+        // 用户原话："LaTeX语法没有实装。"
+        // 输入侧先翻成普通表达式（见 Latex），再走原来的词法/语法。
+        assertEquals(0.5, e1("\\frac{1}{2}"), 1e-12)
+        assertEquals(2.0, e1("\\frac{x+1}{2}", 3.0), 1e-12)
+        assertEquals(3.0, e1("\\sqrt{9}"), 1e-12)
+        assertEquals(2.0, e1("\\sqrt[3]{8}"), 1e-12)
+        assertEquals(0.5, e1("\\sqrt{\\frac{1}{4}}"), 1e-12)
+        assertEquals(2 * PI, e1("2\\pi"), 1e-12)
+        assertEquals(1.0, e1("\\sin x", PI / 2), 1e-12)
+        assertEquals(4.0, e1("\\left(x+1\\right)", 3.0), 1e-12)
+        assertEquals(8.0, e1("x^{3}", 2.0), 1e-12)
+        // 普通表达式一个字符都不动（快速路径）
+        assertEquals("x^2+1", Latex.expand("x^2+1"))
+    }
+
+    @Test
     fun `函数可以省略括号`() {
         assertEquals(1.0, e1("sin x", PI / 2), 1e-12)
         assertEquals(3.0, e1("√9"), 1e-12)
         assertEquals(2.0, e1("√(4)"), 1e-12)
         assertEquals(2.0 * 3.0, e1("2√9"), 1e-12)
+    }
+
+    @Test
+    fun `函数名和变量粘在一起也能拆开`() {
+        // 用户原话："a·sinx 在没打乘号的时候被识别成 asinx，很影响体验。"
+        // 词法器把连着的字母读成一个名字，所以这里要按"函数名前缀"再拆一次。
+        assertEquals(1.0, e1("sinx", PI / 2), 1e-12)
+        // 前缀优先：`asinx` 是 a·sin(x)（a 默认 1.0），不是反三角 asin(x)
+        assertEquals(1.0, e1("asinx", PI / 2), 1e-12)
+        // 参数 a 真的参与运算
+        val e = Expression.compile("asinx", listOf("x"), parameters = ParameterSet.of("a" to 3.0))
+        assertEquals(3.0, e.eval(PI / 2), 1e-12)
+        // 最长函数名优先：`sinhx` 是 sinh(x)，不是 sin(hx)
+        assertEquals(kotlin.math.sinh(1.0), e1("sinhx", 1.0), 1e-12)
+        // 拆不动的照旧报错（atan2 没有单参形态）
+        assertThrows(ExpressionException::class.java) { e1("atan2x") }
     }
 
     @Test
@@ -131,8 +164,9 @@ class ExpressionTest {
         }
         assertTrue(e.message!!, e.message!!.contains("可用的变量"))
 
-        // 函数漏括号要给专门提示
-        val e2 = assertThrows(ExpressionException::class.java) { e1("sinx") }
+        // 函数漏括号要给专门提示（sinx / asinx 这种能拆的已经在
+        // 「函数名和变量粘在一起也能拆开」里救回来了，这里用拆不动的 atan2）
+        val e2 = assertThrows(ExpressionException::class.java) { e1("atan2x") }
         assertTrue(e2.message!!, e2.message!!.contains("括号"))
     }
 

@@ -306,7 +306,7 @@ private fun primaryVariable(mode: PlotMode): String = mode.variables.firstOrNull
  */
 private fun elementaryRows(): List<List<KeySpec>> = listOf(
     listOf(fn("sin"), fn("cos"), fn("tan"), logKey()),
-    listOf(op("^"), op("√"), absBar(), op("=")),
+    listOf(op("^"), rootKey("√", "√()"), absBar(), op("=")),
     listOf(op("+"), op("−", "-"), op("×"), op("÷"))
 )
 
@@ -349,9 +349,9 @@ private fun letterRow(vars: List<String>): List<KeySpec> {
  * 它们也不是函数名 —— 退格该逐字符删（[isKnownFunctionName] 里没有它们），
  * 所以千万别把它们塞进 [FUNCTION_NAMES] 那份函数名清单。
  *
- * 这一轮只放键位 + 让引擎能算（默认 1.0，所以 `a*x+b` 等价于 `x+1`）；
- * 真正"可调"的取值来源（用户说"等下讲干什么"，大概率是滑块）还没做，
- * 到时候接的是 `ParameterSet` 的取值，不用动这里的键盘模型。
+ * 取值来源已经接好：滑动条列表（`GraphState.sliders`）驱动 `ParameterSet`，
+ * 拖动时曲线实时变（见 `GraphState.parameters()`）。键盘这一侧不用知道这件事 ——
+ * 它只负责插入名字，取值在编译表达式时由引擎折成常量。
  */
 private fun param(name: String): KeySpec = variable(name)
 
@@ -588,8 +588,33 @@ private fun trigVariants(key: String): List<KeySpec> =
  */
 private fun logVariants(): List<KeySpec> = listOf(logKey(), fn("ln"), fn("lg"))
 
-/** 根号族：平方根 / 立方根。这两个是符号键，插入的就是符号本身，不带括号。 */
-private fun rootVariants(): List<KeySpec> = listOf(op("√"), op("∛"))
+/**
+ * 根号键：插入 `√()` 并退一格，光标落在括号里（和 [fn] 同一个约定）。
+ *
+ * **为什么要带这对括号**（用户原话："让输入根号之后在解析里面自动带根号，
+ * 不然根号里不能输整式，还要加一个看不见的括号才行"）：
+ * 只插一个 `√` 时，`√x+1` 按运算符优先级会被解析成 `√x` 再 `+1`；
+ * 带上括号之后源码是 `√(x+1)`，而 `MathRender` 把 `√(...)` 的括号**吃掉**、
+ * 只画一根要开方的横线 —— 看起来是手写根号，语义上却是一个"看不见的括号"。
+ *
+ * 退格会把 `√()` 一次删掉（见 [deleteRootCallBefore]），不会留下半截括号。
+ */
+private fun rootKey(label: String, insert: String): KeySpec =
+    KeySpec(label, KeyAction.Insert(insert, cursorBack = 1))
+
+/**
+ * 根号族：平方根 / 立方根 / **n 次根号**。
+ *
+ * `ⁿ√` 插的是 `root(,)`（引擎里的 `root(被开方数, 次数)`），
+ * 光标落在**次数槽位**（`,` 之后、`)` 之前）—— 用户原话："输入 n 次根号时
+ * 优先定位到次方位置"。要回去填被开方数就点一下根号下面那块（见
+ * `MathRender` 里的空槽停靠点）。
+ */
+private fun rootVariants(): List<KeySpec> = listOf(
+    rootKey("√", "√()"),
+    rootKey("∛", "∛()"),
+    rootKey("ⁿ√", "root(,)")
+)
 
 /**
  * 当前正在用的那个变体在 [variants] 里的下标 —— 气泡靠它把选中项高亮。
@@ -727,6 +752,64 @@ private fun isNameBoundary(text: String, nameStart: Int): Boolean =
     nameStart == 0 || !text[nameStart - 1].isLetter()
 
 /**
+ * 根号类按键插入的**空骨架**：`√()` / `∛()` / `root(,)`。
+ *
+ * 用户原话："像根号删除的时候就是一步删除，不要点击删除之后还露出来括号，
+ * 把这个括号作隐式括号"。这三种骨架的括号是**看不见的**（排版层把它们吃掉了），
+ * 所以退格也必须把它们当成一个整体一次还回去 —— 否则屏幕上会先冒出半个括号。
+ */
+private val STRUCTURAL_TEMPLATES: List<String> = listOf("√()", "∛()", "root(,)")
+
+/**
+ * 光标左边是不是一个**完整的空骨架**（[STRUCTURAL_TEMPLATES] 之一），是就整段删掉。
+ *
+ * 两种情形：
+ *   1. 光标正好在骨架末尾（`√()` 打完就退格）；
+ *   2. 光标夹在骨架**内部**（老师先点了括号中间再退格）。
+ *
+ * 只认**空**骨架：`√(x+1)` 里有内容，退格应该逐字符删（用户还在编辑式子）。
+ */
+private fun deleteStructuralCallBefore(text: String, c: Int): Pair<String, Int>? {
+    for (template in STRUCTURAL_TEMPLATES) {
+        // 情形 1：整段在光标左侧
+        val before = c - template.length
+        if (before >= 0 && text.startsWith(template, before) && isNameBoundary(text, before)) {
+            return (text.substring(0, before) + text.substring(c)) to before
+        }
+        // 情形 2：光标在模板内部（模板从光标左边某处开始、跨过光标）
+        for (cut in 1 until template.length) {
+            val start = c - cut
+            if (start >= 0 && text.startsWith(template, start) && isNameBoundary(text, start)) {
+                return (text.substring(0, start) + text.substring(start + template.length)) to start
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * 插入 [insert] 之前要不要先补一个 `*`（见 [editText] 的 Insert 分支）。
+ *
+ * 只在**同时**满足下面两条时补：
+ *   1. [insert] 是一个函数名 + 左括号（`sin(`、`log(,`、`root(,` …）；
+ *   2. 光标左边紧挨着字母 / 数字 / 右括号 —— 也就是词法器会把两边粘成一个名字的情形。
+ *
+ * 为什么不给 `√` / `∛` 补：它们不是字母，[readIdent] 读到这里就停了，
+ * `a√x` 天然被切成 `a` 和 `√x` 两截，不需要乘号。
+ *
+ * 为什么补的是 `*` 而不是 `·`：`*` 是项目里现成的写法（见 [mul]），
+ * 引擎两种都认，但源码里保留 ASCII 更容易让用户看懂自己打了什么。
+ */
+private fun needsTimesBefore(text: String, c: Int, insert: String): Boolean {
+    if (c <= 0 || c > text.length) return false
+    val name = insert.substringBefore('(')
+    if (name.isEmpty() || name.length == insert.length) return false
+    if (!isKnownFunctionName(name) && !isKnownFunctionName(name.lowercase())) return false
+    val prev = text[c - 1]
+    return prev.isLetterOrDigit() || prev == ')'
+}
+
+/**
  * 光标左边是不是一个"调用"（`name()` / `name(` + `)`），是就整体删掉。
  *
  * 候选名字是 [WHOLE_CALL_NAMES]：引擎函数名 + 取坐标键的 `x` / `y`。
@@ -825,8 +908,18 @@ fun editText(text: String, cursor: Int, action: KeyAction): Pair<String, Int> {
             if (action.text == "," && c < text.length && text[c] == ',') {
                 return text to (c + 1)
             }
-            val next = text.substring(0, c) + action.text + text.substring(c)
-            next to (c + action.text.length - action.cursorBack).coerceIn(0, next.length)
+            // 函数键**紧贴在字母 / 数字 / 右括号后面**时，补一个显式乘号。
+            //
+            // 用户原话："很尴尬的情况就是 a·sinx 在没打乘号的时候被识别成 asinx"。
+            // 词法层（engine/Lexer.kt 的 [readIdent]）会把连着的字母读成**一个**名字，
+            // 所以 `a` 后面直接按 `sin` 得到的源码 `asin()` 会被当成一个不认识的
+            // 名字 `asin`，而不是 `a*sin()`。排版层没有这个问题，
+            // 但求值层必须有乘号才分得开 —— 于是让键盘自己补上，
+            // 用户看到的仍然是「a·sin(x)」这种手写习惯。
+            val glue = if (needsTimesBefore(text, c, action.text)) "*" else ""
+            val inserted = glue + action.text
+            val next = text.substring(0, c) + inserted + text.substring(c)
+            next to (c + inserted.length - action.cursorBack).coerceIn(0, next.length)
         }
 
         KeyAction.Backspace ->
@@ -837,7 +930,8 @@ fun editText(text: String, cursor: Int, action: KeyAction): Pair<String, Int> {
                 isBetweenBars(text, c) ->
                     (text.substring(0, c - 1) + text.substring(c + 1)) to (c - 1)
 
-                else -> deleteWholeCallBefore(text, c)
+                else -> deleteStructuralCallBefore(text, c)
+                    ?: deleteWholeCallBefore(text, c)
                     ?: ((text.substring(0, c - 1) + text.substring(c)) to (c - 1))
             }
 

@@ -20,6 +20,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,24 +52,30 @@ import androidx.compose.material.Checkbox
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.Key
@@ -79,15 +86,16 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import android.os.Build
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import com.functiondrawer.watch.engine.CallableSet
+import com.functiondrawer.watch.engine.Calc
 import com.functiondrawer.watch.engine.GPoint
 import com.functiondrawer.watch.engine.PlotFunction
 import com.functiondrawer.watch.engine.PlotMode
@@ -95,12 +103,14 @@ import com.functiondrawer.watch.engine.Plotter
 import com.functiondrawer.watch.ui.theme.CurvePalette
 import com.functiondrawer.watch.ui.theme.FunctionDrawerTheme
 import com.functiondrawer.watch.ui.theme.PillShape
+import com.functiondrawer.watch.ui.keyboard.KeyPage
 import android.graphics.Rect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.exp
 import kotlin.math.min
 
@@ -134,10 +144,31 @@ import kotlin.math.min
  * 编码器走 `AXIS_SCROLL`；还有机型把表冠映射成按键。三条路都接上，
  * 全部收敛到同一个 [GraphState.zoomByFactor]。
  */
+/**
+ * 「抽屉三屏」合并后的 key。
+ *
+ * `AnimatedContent` 是按 key 决定"要不要转场"的。列表 / 功能界面 / 图像这三个路由
+ * 现在住在同一个 [TabDeck] 里（横向 Pager + 纵向抽屉，位移由它自己算），
+ * 所以它们在转场系统眼里必须是**同一屏** —— 否则每次横滑换页都会再叠一层
+ * AnimatedContent 的缩放淡入，那就是"滑动之后又播动画"。
+ *
+ * 用一个独立的哨兵对象（而不是复用 `Route` 里的某一项）：它只在这一处使用，
+ * 不会和真实路由混淆，也不需要给 `Route` 增加一个"永远不该被赋给 state"的成员。
+ */
+/** 从整屏页面退回抽屉时，补做背景的间隔（毫秒）。 */
+private const val BACKDROP_RECOVER_DELAY_MS = 220L
+
+private val DECK_KEY = Any()
+
 @Composable
 fun GraphScreen(
     rotary: Flow<Float>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * 欢迎页里选了「进入新手教程」时为 true：进来的第一帧就把教程跑起来。
+     * 默认 false，其它入口（正常启动、从欢迎页自己摸索）行为不变。
+     */
+    autoTutorial: Boolean = false
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -158,7 +189,35 @@ fun GraphScreen(
         }
     }
 
-    FunctionDrawerTheme {
+    // 欢迎页选了「进入新手教程」：第一次进这一屏就把教程起起来。
+    // 只在首次组合时判一次（autoTutorial 是个一次性标记，调用方已经取走了）。
+    LaunchedEffect(Unit) {
+        if (autoTutorial) Tutorial.start(Route.List)
+    }
+
+    // 底色：默认夜间（dayMode = false）= 原来那套黑底 UI；打开「白天模式」才换白纸那套。
+    // 主题外壳一换，四样东西同时变：
+    //   * M2 的 12 个槽位 + MD3 扩展属性（卡片、文字、描边、涟漪）；
+    //   * 12 个曲线色（粉彩 ⇄ 深饱和，否则白底上整片消失）；
+    //   * 按键的 10 个角色（深灰+白字 ⇄ 浅灰+黑字）；
+    //   * 按压反馈那层叠加色（提亮 ⇄ 压暗）。
+    // 下面所有 `.background(...)` 读的都是 `MaterialTheme.colors.background`，
+    // 所以这一处不用改任何别的地方 —— 但"别的地方"如果写死了颜色就会露馅，
+    // 本轮已经把它们全部改成读 KeyPalette / activeXxxColors。
+    FunctionDrawerTheme(
+        dayMode = state.settings.dayMode,
+        glass = state.settings.themeStyle == ThemeStyle.LIQUID_GLASS
+    ) {
+        // 整屏级提供「当前是不是毛玻璃主题」。
+        //
+        // 之前 `LocalGlassTheme` **只在 `TabDeck` 内部** provide（那里是抽屉里两屏的
+        // 作用域），于是设置页 / 应用信息 / 函数编辑器这些**整屏路由**读到的
+        // 永远是默认 false —— 六处 `glassSurface(...)` 一次都没挂上，用户看到的
+        // 就是"设置界面的按钮没有毛玻璃效果"。在这里再 provide 一层，
+        // 让所有整屏路由和抽屉里读到的值一致。
+        CompositionLocalProvider(
+            LocalGlassTheme provides (state.settings.themeStyle == ThemeStyle.LIQUID_GLASS)
+        ) {
         BoxWithConstraints(
             modifier
                 .fillMaxSize()
@@ -178,6 +237,7 @@ fun GraphScreen(
             // 和「函数列表」「功能界面」两屏共用同一个 `ScreenGeometry`
             // （它在 `FunctionList.kt` 里，非圆屏那一支会铺满屏宽减左右余量）。
             val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
+
             /**
              * 这一屏是圆屏还是非圆屏（手机 / 方表）。
              *
@@ -188,10 +248,10 @@ fun GraphScreen(
              *
              * 两个宽度换算的**唯一去处**是 `MathKeyboard.bandWidth(...)`
              * （圆屏弧宽 / 非圆屏满宽那一支，和数学键盘、属性屏各栏共用同一份），
-             * 而它要的 `isRound` 只能从 `LocalConfiguration` 读 —— 所以在这里读一次，
+             * 而它要的 `isRound` 只能从 `isRoundScreen()` 读（用户选过的屏幕形状）—— 所以在这里读一次，
              * 下面两处浮层（toast / 两类对话框）都复用它。
              */
-            val isRound = LocalConfiguration.current.isScreenRound
+            val isRound = isRoundScreen()
 
             LaunchedEffect(constraints.maxWidth, constraints.maxHeight) {
                 state.attachSurface(
@@ -205,6 +265,16 @@ fun GraphScreen(
             val quality = state.quality
             val settings = state.settings
             val sliders = state.sliders
+
+            // 把设置里的计算精度同步给引擎侧全局（采样归零 / 数字显示 / 缩放上限都读它）。
+            // 用 SideEffect：每次重组都在绘制之前执行，首帧画出来就已经是新精度。
+            SideEffect {
+                Calc.precision = settings.precision
+                // 切到更低精度时，把已经放得比新上限还大的视野夹回来
+                state.clampViewportToPrecision()
+                // 按钮下阴影强度同步给全局（`glassElevation` 读它，见 `activeKeyShadow`）。
+                activeKeyShadow.value = settings.keyShadowStrength.coerceIn(0f, 1f)
+            }
 
             // （这里原来有一个 `undoVisible`：算"底部那条 2 秒撤销条会不会显示"，
             //   两处读它 —— 第一屏的 `showUndo` 与下面 toast 的落点。
@@ -283,8 +353,67 @@ fun GraphScreen(
             var savingFile by remember { mutableStateOf(false) }
             /** 命名对话框里那行红字（"名字不能为空"/"已有同名文件"），null = 没问题。 */
             var saveError by remember { mutableStateOf<String?>(null) }
+            /** 点「重温新手教程」时已有 `test` 文件 → 先问一句"删掉再开始吗"。 */
+            var replayAsk by remember { mutableStateOf(false) }
             val graphCapture = rememberGraphCapture()
             val saveScope = rememberCoroutineScope()
+
+            // ---- 3.41 / 3.42：任何"影响函数图像显示"的设置一变，背景就重做 ----
+            //
+            // ## 为什么必须"先刷新图层"
+            //
+            // `GraphCapture` 挂在一个 `drawWithContent` 上，只有**它自己重绘**时
+            // 才会把内容重新录进 `GraphicsLayer`。而它挂的那一层（画布）是纯 Canvas，
+            // 输入不变就一个像素都不重绘 —— 用户在设置页里拨滑条时，画布纹丝不动，
+            // 图层里仍是进设置之前那张。
+            //
+            // 所以光让 `BackdropImage` 重新"请求一帧"没有用：源头就是旧的。
+            // `BackdropProducer.request()` 内部会自动 `invalidateSource`（见那里），
+            // `runOnce` 也会等绘制真的完成再取图（见 DrawnTicker）。
+            //
+            // ## ⚠️ key 用**整份 settings**，不是挑几个字段
+            //
+            // 用户原话："在设置调整任何对函数图像界面的显示有更改的设置都要重绘背景，
+            // 比如显示/隐藏坐标轴等等。"
+            //
+            // 挑字段（原来只挑了 blurStrength / blurBackdrop / themeStyle）必然会漏：
+            // 显示网格、显示坐标轴、显示刻度数字、坐标系、日夜模式……每加一个设置
+            // 就要回来补一次 key，漏掉的后果就是"改了没反应"。
+            //
+            // `WatchSettings` 是 data class，相等性按字段逐项比较 —— 拿整份当 key
+            // 既不会漏，也不会因为"值没变的重复设置"盲目重做。
+            //
+            // 代价：背景重做一次 = 一次 `GraphicsLayer` 读图 + 一次 RenderScript 卷积
+            // （手表上约 20~40ms，在后台线程）。用户不会在一秒内改十次设置，
+            // 所以这点开销换来"任何设置都立刻生效"，完全值得。
+            //
+            // ## ⚠️ 3.44：这一条只覆盖"即时生效"的那些页，设置页**不走这里**
+            //
+            // 设置页（`Route.Settings`）改的是**草稿** `settingsDraft`，退出才写进
+            // `state.settings`。所以在这里等 `settings` 变是等不到的 —— 用户正是因为
+            // 这个才看到"要等回到函数列表才重绘"。设置页那两条（开开关 / 调程度）
+            // 在下面的 `onChange` 里直接触发，见那里的注释。
+            LaunchedEffect(state.settings) {
+                if (!state.settings.blurBackdrop) return@LaunchedEffect
+                BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+            }
+
+            // ---- 3.41：从"整屏页面"退回抽屉时，补做一次 ----
+            //
+            // ## 为什么必须有这一条
+            //
+            // 设置 / 文件列表 / 编辑器这些是**整屏路由**：`AnimatedContent` 切走时
+            // `TabDeck`（连带画布）整块离开组合树。于是"在设置页里拨模糊程度"时：
+            //
+            //   * 画布不在树里 → 没有 `drawWithContent` → `DrawnTicker` 永不前进；
+            //   * 取图那一步等满 [FRAME_WAIT_TIMEOUT_MS] 后放弃（这是对的，不写失败）；
+            //   * 退回抽屉后画布重新进场，**但没人再请求过一次** ——
+            //     背景就一直停在进设置之前那张。用户看到的就是"改了没反应"。
+            //
+            // 所以在"回到抽屉路由"这一刻补一次。此时画布刚组合、马上要画第一帧，
+            // `DrawnTicker` 会正常前进，取到的是新设置下的图。
+            //
+            // ⚠️ 具体实现在下面 `val deckKey` 之后（那里才知道当前是不是抽屉路由）。
 
             // ---- 设置的"草稿"机制 ----
             //
@@ -313,6 +442,61 @@ fun GraphScreen(
                         state.route = Route.List
                     }
                 }
+            }
+
+            // ---- 更多菜单三个子页（表冠 / 触摸 / 主题）的**即时生效** ----
+            //
+            // 为什么不走 [commitSettings] 的草稿机制：那套是为了坐标系的
+            // "退出才生效 + 切了先问一句"存在的（切换它会清空全部函数）。
+            // 表冠 / 触摸 / 主题这三项随时可逆、当场可见，没有确认框，
+            // 所以子页点一下就立刻写进生效值；返回由各子页自己的 onBack 负责。
+            //
+            // ⚠️ 这里**刻意不做导航**：灵敏度滑条拖动时每一步都会回调一次，
+            // 把"跳回更多菜单"混进来会让用户刚碰到滑条就被弹出去。
+            /**
+             * 设置页里改了一项 → 判一次要不要重做背景，以及要不要播晕染（3.44）。
+             *
+             * ## 为什么要单独一个函数
+             *
+             * 用户 3.44 把规则说死了：
+             *
+             * > "我不是说只有开屏第一次和在设置里打开模糊背景开关之后的第一次和
+             * >  调整模糊程度之后的第一次才有绘制动画吗。"
+             *
+             * 也就是：**能重绘**的入口很多（改网格、改坐标轴、改主题、退出设置……），
+             * 但**播动画**的只有那三处。判定集中在这一个函数里，就不会有
+             * "某个入口忘了判"或"某处又偷偷播了"的情况。
+             *
+             * @param prev 改之前的值
+             * @param next 改之后的值
+             */
+            fun requestBackdropForSettings(prev: WatchSettings, next: WatchSettings) {
+                // 关着的时候什么都不做：`BackdropImage` 里那张图已经被 reset 掉了，
+                // 这时候硬做一张只会留下"关了还有背景"的怪现象。
+                if (!next.blurBackdrop) return
+                val why = when {
+                    // 开关：关切 → 开。这是用户点名要播的三处之一。
+                    !prev.blurBackdrop && next.blurBackdrop -> BackdropReason.TOGGLED_ON
+                    // 程度：值真的变了。注意滑条拖动时每一帧都会回调一次，
+                    // 而 `BackdropProducer.pending` 只会留最新那份，不会堆。
+                    prev.blurStrength != next.blurStrength -> BackdropReason.STRENGTH
+                    // 其余（网格 / 坐标轴 / 刻度 / 坐标系 / 日夜 / 主题）：
+                    // 用户 3.41 要求"任何影响显示的设置都要重绘"，但**不播**动画。
+                    else -> BackdropReason.OTHER
+                }
+                BackdropImage.requestFor?.invoke(why)
+            }
+
+            // ⚠️ 顺序：`applySettingsChange` 里要用上面那个函数，所以声明必须在它之前。
+            fun applySettingsChange(next: WatchSettings) {
+                val prev = state.settings
+                state.updateSettings(next)
+                // ---- 3.44：主题设置子页里也有「模糊背景」开关和「模糊程度」滑条 ----
+                //
+                // 那是另一个入口（更多菜单 → 主题设置），走的是这条**即时生效**的路，
+                // 不是设置页的草稿。两条路都必须能触发重绘，否则用户从那边改就
+                // 又是"改了没反应" —— 这一轮报的就是这个。
+                requestBackdropForSettings(prev, next)
             }
 
             // 采样放到后台线程：隐函数在高精度下要做几万次求值，
@@ -362,7 +546,10 @@ fun GraphScreen(
                 // 图不会重画，看起来就是"点了没反应"。
                 // 表本身是一个 `Map<函数 id, Map<字母, 对象 id>>`，`mutableStateOf` 里
                 // 每次指认都会换成新对象，所以它当 key 是"值变了才重采样"。
-                state.functionBindings
+                state.functionBindings,
+                // 计算精度也影响采样结果（小到阈值以下的 y 会被归零），
+                // 不列进 key 的话改精度之后曲线还是旧的那一份。
+                settings.precision
             ) {
                 // 滑动条的当前值就是可绑定参数 a/b/c/d 的取值（#3）。
                 // 走 `state.parameters()` 而不是就地 `sliders.toParameterSet()`：
@@ -466,6 +653,8 @@ fun GraphScreen(
             // 转表冠会去缩放一个根本看不见的图像，用户只会以为没反应。
             LaunchedEffect(state.route) {
                 if (state.route is Route.Graph) {
+                    // ⚠️ 这条 Flow 里的量**已经在 MainActivity 乘过灵敏度**，
+                    // 这里不能再乘（会变成平方）。见 `rotaryFactor` 的说明。
                     rotary.collect { state.zoomByFactor(rotaryFactor(it)) }
                 }
             }
@@ -485,6 +674,13 @@ fun GraphScreen(
             LaunchedEffect(state.route) {
                 state.rememberScreen(state.route)
             }
+
+            // ---- 3.36：这里不再"生成毛玻璃位图"----
+            //
+            // 3.28~3.35 这一段是"抓函数图那一层 → 糊一遍 → 存单例"的生成点。
+            // 3.37 起这套逻辑搬到 [rememberBackdropProducer]（本文件下面调用），
+            // 抓帧走 PixelCopy，触发点只有"手指碰到提示条"一处，
+            // 这里不再需要任何重试窗口。
 
             /**
              * 离开编辑器时清掉"新建了但一个字都没写"的草稿（用户报的 bug 的治本那一半：
@@ -514,8 +710,135 @@ fun GraphScreen(
             // 各屏之间做一次转场：新屏淡入 + 从 0.94 涨到 1（有一点"弹出来"的感觉），
             // 旧屏更快地淡出。表盘就这么小，两屏长时间叠加会糊成一团，所以旧屏的
             // 退出动画刻意比入场短。
+            // 三个抽屉路由合并成同一个 key（见 DECK_KEY 的说明）。
+            // 其余路由原样 —— 进设置/编辑器/文件列表仍然是整屏转场。
+            val deckKey: Any = when (state.route) {
+                is Route.List, is Route.Tools, is Route.Graph -> DECK_KEY
+                else -> state.route
+            }
+
+            // ---- 3.41：从整屏页面退回抽屉时，补做一次背景 ----
+            //
+            // 见上面 `LaunchedEffect(state.settings)` 后面那段说明：设置页是整屏路由，
+            // 在它里面改设置时画布不在组合树里（`DrawnTicker` 不前进、取图放弃），
+            // 退回抽屉后必须**再请求一次**，否则背景永远停在进设置之前那张。
+            //
+            // 连发三次（间隔 220ms）是因为退场转场期间画布可能还没重新组合出来；
+            // `BackdropProducer` 自己会等绘制完成，早到的那些只会返回 NO_SOURCE 或
+            // 被 `pending` 去重，不会多糊几张。
+            //
+            // ⚠️ 这里**不能**再手写 `invalidate()`：`request()` 内部已经做了
+            // （见 `BackdropImage.invalidateSource`），写两次只会白白多录一遍。
+            LaunchedEffect(deckKey) {
+                if (deckKey != DECK_KEY) return@LaunchedEffect
+                if (!state.settings.blurBackdrop) return@LaunchedEffect
+                repeat(3) {
+                    // ⚠️ 3.44：这里必须是 OTHER（不播晕染）。
+                    //
+                    // 用户报："从创建函数界面或设置界面退出来之后反而会触发绘制动画。"
+                    // 退回抽屉只是"补一张当前画面"，不是用户眼里的"重新开始"，
+                    // 所以它**永远不播**动画。判定见 [shouldAnimateFor]。
+                    BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+                    kotlinx.coroutines.delay(BACKDROP_RECOVER_DELAY_MS)
+                }
+            }
+
+            // ---- 液态玻璃：全局模糊背景 ----
+            //
+            // 用户要求："任何界面（设置、函数列表、功能界面、创建函数界面、文件界面等）
+            // 背景都是模糊效果"。所以模糊底放在**所有路由之外**，只画一份：
+            // 设置、编辑器、文件列表这些页面各自半透明地压在它上面。
+            //
+            // 抽屉路由（列表 / 功能界面 / 图像）不在这里画：那三个由 `TabDeck` 自己管，
+            // 而且它的蒙版要"按抽屉可见区域裁剪"，不能是一张固定的整屏图。
+            // ---- 3.45：设置页里看的是**草稿**，所以背景也要按草稿来 ----
+            //
+            // 用户原话："设置界面也要模糊背景，而不是只有白色背景。在设置调整
+            // 模糊程度的之后（松开调整模糊程度的滑动条）和打开模糊背景之后
+            // 在设置页就要重新绘制模糊的背景。"
+            //
+            // 之前的写法读 `state.settings`。而设置页（`Route.Settings`）和主题设置
+            // 子页改的是**草稿**，退出才写进 `state.settings` —— 于是在设置页里
+            // 打开开关时，这一层仍然按"关"去画，底下什么都没有；设置页自己那层
+            // 62% 遮罩后面就是一块白底。用户看到的正是"只有白色背景"。
+            //
+            // 现在统一取"当前**生效中**的那份"：设置页里就是草稿，别处就是已提交值。
+            // 背景层、开关、程度三处都读它 —— 少一处，就会出现"开关打开了但底没变"。
+            val effectiveSettings = settingsDraft ?: settings
+            val liquidGlass = effectiveSettings.themeStyle == ThemeStyle.LIQUID_GLASS
+            val blurBackdrop = effectiveSettings.blurBackdrop
+            val glassRoute = deckKey != DECK_KEY
+
+            // ---- 3.36：全局背景 = 一张**糊好的静态图**，所有页面共用 ----
+            //
+            // 用户原话：
+            // > "把模糊后的背景作为静态图片放到背景这里来，作为全局的背景，
+            // >  所有页面都是这个背景……只有从函数图像界面滑动提示条的时候
+            // >  重新绘制一帧并作为静态图片作为新背景"
+            //
+            // 所以：
+            //   * 背景图只在"手指碰到提示条"时重做（见 `DrawerDeck` 的 freshBackdrop
+            //     → `BackdropImage.request()`），平时**一个像素都不算**；
+            //   * 抽屉、横滑、页面转场全程都只是贴同一张图 —— 这才是不抽搐的原因；
+            //   * 三处（抽屉背板 / 非抽屉页 / 保存浮窗）看到的是同一张。
+            //
+            // 抓帧机制挂在这里（3.39：取图源是 [graphCapture] —— 它挂在 GraphCanvas
+            // 那一层上，录到的**只有网格/坐标轴/曲线/几何对象**，不含任何 UI 元素，
+            // 也不会把上一张背景拍进去 —— 3.38 的"残影"就是这么来的）。
+            val themeBackground = MaterialTheme.colors.background.toArgb()
+            val themeKey = "${themeBackground}|$blurBackdrop|${effectiveSettings.themeStyle}"
+            rememberBackdropProducer(
+                enabled = blurBackdrop,
+                themeKey = themeKey,
+                themeBackground = themeBackground,
+                snapshot = if (blurBackdrop) {
+                    {
+                        runCatching { graphCapture.toImageBitmap() }
+                            .onFailure { BackdropImage.fail("取画布失败：${it.message}") }
+                            .getOrNull()
+                    }
+                } else {
+                    null
+                },
+                // 模糊程度（3.40）：改它也会自动重做一帧（`themeKey` 不含它，
+                // 由 `rememberBackdropProducer` 自己的 `LaunchedEffect` 负责）。
+                //
+                // ⚠️ 3.45：必须读**草稿**。拖动滑条时这里每变一格都会发起一次请求，
+                // 但 `BackdropProducer.request` 在忙时只把最新参数存进 `pending`、
+                // 由 `finishAndDrain` 补做 —— 所以拖动中最多两张卷积，
+                // 不会出现"每格都糊一遍"的卡顿，而松手那一下的值一定是最新的。
+                strength = effectiveSettings.blurStrength,
+                // 自动重做只在"生效值"变化时发生（3.45）。设置页拖动中草稿每格都变，
+                // 若拿草稿当 key 会逐格卷积、明显掉帧；松手那一下由
+                // `onStrengthCommit` → `requestAt` 立刻补一张，所以这里用已提交值。
+                autoStrengthKey = settings.blurStrength,
+                // 取图前先把画布那一层赶脏（3.41）：否则纯 Canvas 不重绘，
+                // 图层里永远是旧内容，"改了没反应"。
+                invalidateSource = { graphCapture.invalidate() }
+            )
+
+            // 抽屉背后那片：一张静态图 + 可见区域裁剪，见 `TabDeck`。
+            // 非抽屉页（设置 / 编辑器 / 文件列表…）和保存浮窗也画同一张图。
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
+                    if (blurBackdrop) {
+                        // 全局背景：贴图 + 10% 压暗。**没有计算**。
+                        GlobalBackdrop(modifier = Modifier.fillMaxSize())
+                    } else {
+                        // 关掉模糊：所有非抽屉页背后垫一块实色底，
+                        // 把底下那张清晰的函数图挡住（否则玻璃主题的半透明页面
+                        // 会直接透出函数图，"设置页浮在图上"）。
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colors.background)
+                        )
+                    }
+                }
+
+                Box(Modifier.fillMaxSize()) {
             AnimatedContent(
-                targetState = state.route,
+                targetState = deckKey,
                 transitionSpec = {
                     when {
                         // ---- 功能界面 ⇄ 函数列表：**左右**切换 ----
@@ -635,8 +958,17 @@ fun GraphScreen(
                         // 所以这里把两条名字**显式**写进同一个条件、共用同一个
                         // [softScreenTransition]（参数与 `else` 逐字相同，只写了一份），
                         // 谁先把这一对拆开，谁就会看到这一段注释。
+                        // 更多菜单与它的四个子页（本轮新增）也走这一套：
+                        // 这几屏都是"从列表长按进去、看一眼/改一项、退回来"的轻量层，
+                        // 用同一套软转场，手感才和设置页、文件列表是一套。
                         targetState is Route.Saves || initialState is Route.Saves ||
-                            targetState is Route.About || initialState is Route.About ->
+                            targetState is Route.About || initialState is Route.About ||
+                            targetState is Route.MoreSettings || initialState is Route.MoreSettings ||
+                            targetState is Route.CrownSettings || initialState is Route.CrownSettings ||
+                            targetState is Route.CalcSettings || initialState is Route.CalcSettings ||
+                            targetState is Route.TouchSettings || initialState is Route.TouchSettings ||
+                            targetState is Route.ThemeSettings || initialState is Route.ThemeSettings ||
+                            targetState is Route.Developer || initialState is Route.Developer ->
                             softScreenTransition()
 
                         // 其余（图像 ⇄ 编辑 ⇄ 设置）：淡入 + 轻微放大
@@ -646,9 +978,10 @@ fun GraphScreen(
                         else -> softScreenTransition()
                     }
                 },
+
                 label = "route"
-            ) { route ->
-                when (route) {
+            ) { routeKey ->
+                when (routeKey) {
                 // ---- 首屏：函数列表 ----
                 // 这里是导航的根，所以**不拦返回键** —— 让系统正常退出应用。
                 //
@@ -658,192 +991,274 @@ fun GraphScreen(
                 // 给 `GraphObjectRow` 加一个必填参数会让那一处编译不过，
                 // 所以走环境值（见 `LocalObjectShowValueToggle` 的注释）。
                 // 只包这一支：别处用不到它。
-                Route.List -> CompositionLocalProvider(
-                    LocalObjectShowValueToggle provides { id: Long ->
-                        state.toggleObjectShowValue(id)
-                    }
-                ) {
-                FunctionListScreen(
-                    functions = functions,
-                    errors = state.plot.errors,
-                    selectedId = state.selectedId,
+                // ---- 三屏合一：抽屉（列表 ⇄ 功能界面）+ 底层图像 ----
+                //
+                // 这里原来有三个平级分支（List / Tools / Graph），各自是一整屏，
+                // 由 `AnimatedContent` 在路由切换时播一段转场。用户要的是另一种模型：
+                //
+                // > "函数列表界面和功能界面像一屏和二屏一样可以随便滑动，
+                // >  函数列表和功能界面与函数界面切换就像一个抽屉拉回和拉出一样，
+                // >  函数界面在下面，抽屉在上面，抽屉有吸附。"
+                //
+                // 所以三屏交给 [TabDeck]：横向是 Pager（跟手翻页、过半吸附），
+                // 纵向是抽屉（图像在底层不动，抽屉整块往上推，拖动时跟手，松手按 42% 吸附）。
+                //
+                // 三个 lambda **就地定义**，因此仍然捕获这一层作用域里的全部局部变量
+                // （functions / settings / metrics / rotary / viewport …）——
+                // 不需要给 TabDeck 加几十个参数，也不用把三段界面搬去别的文件。
+                DECK_KEY -> TabDeck(
+                    route = state.route,
                     metrics = metrics,
-                    // 点一行就是编辑（用户要求去掉长按、也去掉"点一下看图"）
-                    onEdit = { id ->
-                        state.selectedId = id
-                        state.route = Route.Editor(id)
-                    },
-                    // 长按一行 = 属性编辑界面（#4：名称 / 线型 / 线径）。
-                    // 顺手把 selectedId 指过去：列表里的高亮和"正在改哪一条"保持一致，
-                    // 从属性界面回来时看到的仍然是同一条被选中。
-                    onProperties = { id ->
-                        state.selectedId = id
-                        state.route = Route.Properties(id)
-                    },
-                    // **短按一个几何对象行** = 详情页（本轮新增：只读、显示完全）。
-                    //
-                    // 只有对象行走这条路（函数行的短按仍然是 onEdit 改表达式）——
-                    // 用户说的是"给**除了函数之外**点击没有菜单的加一个点击显示详情页面"。
-                    // 同样顺手把 selectedId 指过去：从详情页回来时列表高亮还在这一条上。
-                    //
-                    // 为什么它和上面那条长按**不是**同一个去处：用户要的详情页是**只读**的
-                    // （"只显示这个点的颜色，名字和它的坐标……显示完全"），
-                    // 而长按那一屏是**可改名字**的编辑器。两屏的版面和浮层语言共用，
-                    // 但输入语义完全不同，合并会变成"点一下进来就能改"（他要的不是这个）。
-                    onObjectDetails = { id ->
-                        state.selectedId = id
-                        state.route = Route.Details(id)
-                    },
-                    onToggleVisible = { id ->
-                        // 走状态层那个**带撤销点**的方法（本轮新增 `GraphState.setVisible`）：
-                        // 直接 `updateFunction(fn.copy(visible = …))` 的话，这一步在历史栈里
-                        // 会被算成"编辑 a(x)"（tag 是 `edit:<id>`），和"正在编辑器里打字"
-                        // 那一串合并 —— 而"点了色点改显隐"在用户心里是独立的一步。
-                        state.functions.firstOrNull { it.id == id }?.let { fn ->
-                            state.setVisible(id, !fn.visible)
+                    // 主题风格：只管卡片材质（Material = 实色卡片、玻璃 = 半透明玻璃面）
+                    glass = settings.themeStyle == ThemeStyle.LIQUID_GLASS,
+                    // 模糊背景：两个主题都能用（用户本轮要求）。
+                    // 关掉时抽屉里是一块不透明底 —— 也就是"最开始没做模糊效果时"
+                    // 那个实心抽屉的观感。
+                    blurBackdrop = settings.blurBackdrop,
+                    onRoute = { state.route = it },
+                    graph = {
+
+                        // 工具取到一半时按返回：**先退出工具**（回到「移动」），
+                        // 再按一次才退出应用。理由和"先取消再退出"一样 ——
+                        // 直接跳走会把半截选择留在状态里，用户下次进来看到
+                        // 莫名其妙的残留高亮。
+                        //
+                        // ⚠️ 抽屉模型下这一条改了：图像界面现在是**根**，所以
+                        // "已经在移动工具上"时**不拦**返回键（`enabled = false`），
+                        // 让系统正常退出 App。否则用户从这里永远退不出去 ——
+                        // 列表页那边也拦了返回（收抽屉），两条一叠就成了死循环。
+                        BackHandler(enabled = !state.isMoveTool) {
+                            state.backToMove()
+                            state.showToast("已退出${state.activeTool.label}")
+                        }
+                        // 保存**图像**那条路（SaveImageDialog + GraphCapture）这一轮不再接在
+                        // 长按 `+` 上（用户改成了保存函数文件），所以这里也不再弹提示框。
+                        // `capture` 仍然一路传到画布：`ImageExport.kt` 是明确要求保留的，
+                        // 将来恢复"存图"只要在这里再挂一个对话框、调 `capture.savePng`。
+                        Box(Modifier.fillMaxSize()) {
+                            GraphRoute(
+                                state, metrics, geometry, viewport, settings, graphCapture
+                            )
                         }
                     },
-                    onDelete = { id -> state.removeFunction(id) },
-                    onAdd = {
-                        // 用户要求：新建时**不预填**表达式；如果保存时还是空的，
-                        // 就干脆不添加这个函数（见下面的 onDone），只弹个 toast。
-                        val id = state.addFunction(starterMode(state))
-                        state.markJustCreated(id)
-                        state.route = Route.Editor(id)
-                    },
-                    onAddPreset = { preset ->
-                        // 示例本身就是按坐标系配好的，这里不必再过一遍 coerce。
-                        // 量程用示例自带的 tMin/tMax（不要再把 tMin 硬写成 0，
-                        // 那样以后加一个"从 -π 开始"的示例就会被悄悄改坏）。
-                        val id = state.addFunction(preset.mode, preset.src1, preset.src2)
-                        state.updateFunction(
-                            state.functions.first { it.id == id }
-                                .copy(tMin = preset.tMin, tMax = preset.tMax)
-                        )
-                        state.selectedId = id
-                        state.route = Route.Graph
-                    },
-                    onSettings = { state.leaveToolsMemory(); state.route = Route.Settings },
-                    // **长按 ⚙** = 应用信息页（本轮新增）。走和上面短按同一套收尾：
-                    // `leaveToolsMemory()` 把"上滑回哪一屏"定成函数列表（这一屏就是从
-                    // 列表长按进来的），然后落到 `Route.About`。
-                    onLongPressSettings = {
-                        state.leaveToolsMemory()
-                        state.route = Route.About
-                    },
-                    onSwipeDown = { state.leaveToolsMemory(); state.route = Route.Graph },
-                    // ---- 工具条上那对箭头：**唯一**的撤销入口（本轮）----
-                    //
-                    // 原来这里还有一条 `showUndo = …` / `onUndo = { … 五路分支 … }`
-                    // 给底部那条 2 秒「已删除 · 点此撤销」用。用户本轮明确要求
-                    // "把所有的撤销的 toast 提示都给删掉"，所以那一整块（连同 `GraphState`
-                    // 里五路备份、上一版那个 2 秒到期 effect）**全删了**；
-                    // 删除动作现在只管 `pushUndo` 记一步 + 弹一条纯提示的 toast。
-                    //
-                    // 栈空时**照样可点**，只是弹一句说明 —— 用户点了没反应是最难受的
-                    // （这条规矩在 `ToolbarUndoRedoMenu` 的参数说明里也写了一遍）。
-                    canUndo = state.canUndo,
-                    canRedo = state.canRedo,
-                    onUndoStep = {
-                        val label = state.undo()
-                        state.showToast(
-                            if (label == null) "没有可撤销的操作" else "已撤销：$label"
-                        )
-                    },
-                    onRedoStep = {
-                        val label = state.redo()
-                        state.showToast(
-                            if (label == null) "没有可重做的操作" else "已重做：$label"
-                        )
-                    },
-                    // 长按 `+` = 把当前**全部函数信息**存成一个 `.fdf` 文件。
-                    // 不再切到图像界面（理由见上面 saveDialogVisible 那段注释）。
-                    // "清空全部"的能力仍然在功能界面右上角那个垃圾桶的长按上。
-                    onLongPressAdd = {
-                        saveError = null
-                        saveDialogVisible = true
-                    },
-                    onColor = { id, index -> state.setColor(id, index) },
-                    showPresets = settings.showPresets,
-                    presets = presetsFor(settings.coordinateSystem),
-                    sliders = state.sliders,
-                    onSliderValue = { id, v -> state.setSliderValue(id, v) },
-                    onSliderPlayToggle = { id -> state.toggleSliderPlaying(id) },
-                    onSliderEdit = { id ->
-                        // 长按滑动条行 → 滑动条的属性编辑界面（#4）：
-                        // 名称（参数字母）、下界、上界、步长。
-                        // 短按仍然什么都不做 —— 这条行天生就是用来拖的。
-                        state.route = Route.SliderProperties(id)
-                    },
-                    // 左滑滑动条行（滑轨和播放键以外的地方）→ 删掉它。
-                    // 撤销走**唯一**那条路：`removeSlider` 在改动前 `pushUndo` 记一步
-                    // （快照里有整条滑动条），用工具条上的左箭头就能整条要回来；
-                    // 同时弹一条纯提示的「已删除滑动条 a」。
-                    onSliderDelete = { id -> state.removeSlider(id) },
-                    // ---- 几何对象（#9）：度量/描点等结果也要在函数列表里看得见 ----
-                    // 注意**不要**把 `complexResultPoints()` 也加进来：复平面下
-                    // 那些"数值运算"本来就是列表里的行（functions），再加一遍会重复显示。
-                    objects = state.objects,
-                    onObjectColor = { id, index -> state.setObjectColor(id, index) },
-                    onObjectToggleVisible = { id -> state.toggleObjectVisible(id) },
-                    onObjectToggleValue = { id -> state.toggleObjectShowValue(id) },
-                    onObjectDelete = { id -> state.removeObject(id) },
-                    // 左边缘往右滑 → 进「功能界面」（#9 的入口手势）
-                    onSwipeToTools = { state.openTools() },
-                    rotary = rotary
-                )
-                // 上面那层 `CompositionLocalProvider`（对象行 `123` 的动作）到此结束
-                }
+                    // 3.36：不需要"另一份 backdrop composable"，也不需要额外位图。
+                    // 背景是全局那张静态图（见 `BackdropImage`）。
+                    tools = {
+                        // ---- 功能界面也要能"下拉收起抽屉" ----
+                        //
+                        // 列表页有自己的顶部下滑热区（`FunctionList` 里那条），
+                        // 功能界面**没有** —— 于是用户在这一屏想回函数图像时只能点返回键，
+                        // 往下拉毫无反应（用户报的"功能界面不能正常切换到函数界面"）。
+                        //
+                        // 这里补一条覆盖顶部 10% 屏高的透明热区，接同一个
+                        // DrawerController：拉到哪、抽屉就落到哪，松手吸附。
+                        // 它只认**向下**的纵向拖动，工具条按钮的点击不受影响，
+                        // 也不会抢横向翻页（那是 Pager 的）。
+                        val drawerCtl = LocalDrawerController.current
+                        BoxWithConstraints(Modifier.fillMaxSize()) {
 
-                // ---- 「功能界面」（#9）----
-                //
-                // 它**没有设置键、没有 + 键**（用户明确要求），只能回图像界面。
-                // 返回键在这里也回图像界面（和列表不同：列表是首屏、不拦返回键）。
-                Route.Tools -> {
-                    BackHandler { state.backToGraph() }
-                    FunctionsScreen(
-                        activeTool = state.activeTool,
-                        objectCount = state.objects.size,
+                        // 同上：只在"当前真的是功能界面"时才接返回，
+                        // 免得相邻页（预渲染的列表）也抢一次返回事件。
+                        BackHandler(enabled = state.route is Route.Tools) {
+                            state.backToGraph()
+                        }
+                        FunctionsScreen(
+                            activeTool = state.activeTool,
+                            metrics = metrics,
+                            onSelectTool = { tool -> state.selectTool(tool) },
+                            onClearObjects = {
+                                // 清屏：只清几何对象。撤销走工具条上那对箭头
+                                // （`clearObjects` 已经在改动前压了一步），所以这里只报一句
+                                // "刚才发生了什么" —— 本轮起**不再**出现"点此撤销"那种字样。
+                                if (state.objects.isNotEmpty()) {
+                                    state.clearObjects()
+                                    state.showToast("已清屏")
+                                } else {
+                                    state.showToast("还没有用工具画过东西")
+                                }
+                            },
+                            onClearAll = {
+                                // 垃圾桶长按 = 连函数/方程一起清。
+                                // 这一路接的是需求 #8 之前的"长按 + 清空全部函数"：
+                                // 那个手势改成保存图像之后，清空能力搬到这里。
+                                // 撤销：`clearObjects` + `clearAllFunctions` 各自在改动前
+                                // 压了一步，所以工具条上的左箭头**按两次**就能把它们都要回来
+                                // （一次撤"清空全部"、再一次撤"清屏"）。
+                                if (state.functions.isEmpty() && state.objects.isEmpty()) {
+                                    state.showToast("屏幕上已经什么都没有了")
+                                } else {
+                                    state.clearObjects()
+                                    state.clearAllFunctions()
+                                    state.showToast("已清掉全部内容")
+                                }
+                            },
+                            onBackToGraph = { state.backToGraph() },
+                            // ⚠️ 抽屉模型下这个回调的语义变了。
+                            //
+                            // 原来（三屏各自独立时）功能界面的"下滑"是回**函数列表**，
+                            // 因为那时列表和功能界面是平级的两屏，回列表 = 往右退一格。
+                            // 现在它们同属一个抽屉：往下是"把抽屉收回去"（回到函数图像），
+                            // 横向才是"列表 ⇄ 功能界面"。
+                            //
+                            // 所以这里改成回 [Route.Graph]，并且**不再调 `leaveToolsMemory()`** ——
+                            // 收抽屉只是"暂时看不见"，下次上滑还应该回到功能界面。
+                            onSwipeDown = { state.route = Route.Graph },
+                            // 左上角文件夹 → 「函数文件」列表（这一轮新增的入口）
+                            onOpenSaves = { state.openSaves() },
+                            // ---- 工具条上那对箭头（本轮新增，和第一屏**逐项同构**）----
+                            // 第二屏的 🗑（清屏 / 长按清空全部）同样是"有意义的改动"，
+                            // 同样会被记进同一个历史栈，所以这里的两个回调与第一屏一字不差。
+                            canUndo = state.canUndo,
+                            canRedo = state.canRedo,
+                            onUndoStep = {
+                                val label = state.undo()
+                                state.showToast(
+                                    if (label == null) "没有可撤销的操作" else "已撤销：$label"
+                                )
+                            },
+                            onRedoStep = {
+                                val label = state.redo()
+                                state.showToast(
+                                    if (label == null) "没有可重做的操作" else "已重做：$label"
+                                )
+                            },
+                            rotary = rotary
+                        )
+
+                        if (drawerCtl != null) {
+                            val screenHPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+                            val zoneH = with(LocalDensity.current) {
+                                (constraints.maxHeight * 0.10f).toDp()
+                            }
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopCenter)
+                                    .fillMaxWidth()
+                                    .height(zoneH)
+                                    .pointerInput(Unit) {
+                                        // 与列表那条完全同构：方向仲裁，
+                                        // 横向占优就永久放弃（否则横滑会被这条吃掉）
+                                        awaitEachGesture {
+                                            awaitOneWayDrag(
+                                                axis = DragAxis.VERTICAL,
+                                                positive = true,
+                                                abandonIfCrossAxisWins = true,
+                                                onDrag = { total ->
+                                                    drawerCtl.dragTo(
+                                                        1f - total /
+                                                            (screenHPx * DRAWER_PULL_FRACTION)
+                                                    )
+                                                },
+                                                onEnd = { drawerCtl.release() }
+                                            )
+                                        }
+                                    }
+                            )
+                        }
+                        }
+                    },
+                    list = {
+                    // ---- 返回键：先收抽屉，再退出 ----
+                    //
+                    // 原来这一屏是导航的根，所以**不拦**返回键（让系统退出 App）。
+                    // 抽屉模型下根变成了函数图像：列表只是"拉出来的抽屉"，
+                    // 按返回时用户期待的是把它收回去，而不是整个 App 消失。
+                    // 连按两次才退出（第一次收抽屉），这是所有抽屉式 App 的常规行为。
+                    // `enabled` 必须绑当前路由：Pager 会**同时组合相邻页**
+                    // （beyondViewportPageCount = 1），如果两个页面都无条件注册
+                    // BackHandler，按一次返回会触发两条回调 —— 表现为"返回跳两次"。
+                    BackHandler(enabled = state.route is Route.List) {
+                        state.route = Route.Graph
+                    }
+                    CompositionLocalProvider(
+                        LocalObjectShowValueToggle provides { id: Long ->
+                            state.toggleObjectShowValue(id)
+                        }
+                    ) {
+                    FunctionListScreen(
+                        functions = functions,
+                        errors = state.plot.errors,
+                        selectedId = state.selectedId,
                         metrics = metrics,
-                        onSelectTool = { tool -> state.selectTool(tool) },
-                        onClearObjects = {
-                            // 清屏：只清几何对象。撤销走工具条上那对箭头
-                            // （`clearObjects` 已经在改动前压了一步），所以这里只报一句
-                            // "刚才发生了什么" —— 本轮起**不再**出现"点此撤销"那种字样。
-                            if (state.objects.isNotEmpty()) {
-                                state.clearObjects()
-                                state.showToast("已清屏")
-                            } else {
-                                state.showToast("还没有用工具画过东西")
+                        // 点一行就是编辑（用户要求去掉长按、也去掉"点一下看图"）
+                        onEdit = { id ->
+                            state.selectedId = id
+                            state.route = Route.Editor(id)
+                        },
+                        // 长按一行 = 属性编辑界面（#4：名称 / 线型 / 线径）。
+                        // 顺手把 selectedId 指过去：列表里的高亮和"正在改哪一条"保持一致，
+                        // 从属性界面回来时看到的仍然是同一条被选中。
+                        onProperties = { id ->
+                            state.selectedId = id
+                            state.route = Route.Properties(id)
+                        },
+                        // **短按一个几何对象行** = 详情页（本轮新增：只读、显示完全）。
+                        //
+                        // 只有对象行走这条路（函数行的短按仍然是 onEdit 改表达式）——
+                        // 用户说的是"给**除了函数之外**点击没有菜单的加一个点击显示详情页面"。
+                        // 同样顺手把 selectedId 指过去：从详情页回来时列表高亮还在这一条上。
+                        //
+                        // 为什么它和上面那条长按**不是**同一个去处：用户要的详情页是**只读**的
+                        // （"只显示这个点的颜色，名字和它的坐标……显示完全"），
+                        // 而长按那一屏是**可改名字**的编辑器。两屏的版面和浮层语言共用，
+                        // 但输入语义完全不同，合并会变成"点一下进来就能改"（他要的不是这个）。
+                        onObjectDetails = { id ->
+                            state.selectedId = id
+                            state.route = Route.Details(id)
+                        },
+                        onToggleVisible = { id ->
+                            // 走状态层那个**带撤销点**的方法（本轮新增 `GraphState.setVisible`）：
+                            // 直接 `updateFunction(fn.copy(visible = …))` 的话，这一步在历史栈里
+                            // 会被算成"编辑 a(x)"（tag 是 `edit:<id>`），和"正在编辑器里打字"
+                            // 那一串合并 —— 而"点了色点改显隐"在用户心里是独立的一步。
+                            state.functions.firstOrNull { it.id == id }?.let { fn ->
+                                state.setVisible(id, !fn.visible)
                             }
                         },
-                        onClearAll = {
-                            // 垃圾桶长按 = 连函数/方程一起清。
-                            // 这一路接的是需求 #8 之前的"长按 + 清空全部函数"：
-                            // 那个手势改成保存图像之后，清空能力搬到这里。
-                            // 撤销：`clearObjects` + `clearAllFunctions` 各自在改动前
-                            // 压了一步，所以工具条上的左箭头**按两次**就能把它们都要回来
-                            // （一次撤"清空全部"、再一次撤"清屏"）。
-                            if (state.functions.isEmpty() && state.objects.isEmpty()) {
-                                state.showToast("屏幕上已经什么都没有了")
-                            } else {
-                                state.clearObjects()
-                                state.clearAllFunctions()
-                                state.showToast("已清掉全部内容")
-                            }
+                        onDelete = { id -> state.removeFunction(id) },
+                        onAdd = {
+                            // 用户要求：新建时**不预填**表达式；如果保存时还是空的，
+                            // 就干脆不添加这个函数（见下面的 onDone），只弹个 toast。
+                            val id = state.addFunction(starterMode(state))
+                            // 教程里那几步（色点 / 行）要圈住**这一条**：把 id 记给状态机。
+                            if (Tutorial.active) Tutorial.tutorialFnId = id
+                            state.markJustCreated(id)
+                            state.route = Route.Editor(id)
                         },
-                        onBackToGraph = { state.backToGraph() },
-                        // 功能界面在列表**左边**，上下滑动都不是它的方向，
-                        // 所以借"下滑"当返回函数列表（用户没规定这个手势）。
-                        onSwipeDown = {
+                        onAddPreset = { preset ->
+                            // 示例本身就是按坐标系配好的，这里不必再过一遍 coerce。
+                            // 量程用示例自带的 tMin/tMax（不要再把 tMin 硬写成 0，
+                            // 那样以后加一个"从 -π 开始"的示例就会被悄悄改坏）。
+                            val id = state.addFunction(preset.mode, preset.src1, preset.src2)
+                            state.updateFunction(
+                                state.functions.first { it.id == id }
+                                    .copy(tMin = preset.tMin, tMax = preset.tMax)
+                            )
+                            state.selectedId = id
+                            state.route = Route.Graph
+                        },
+                        onSettings = { state.leaveToolsMemory(); state.route = Route.Settings },
+                        // **长按 ⚙** = 更多菜单（本轮改）。
+                        // 用户原话："把那些设置放到长按设置键的更多菜单里，分四个大块，
+                        // 点进去再设置，短按设置只打开函数设置界面。"
+                        // 原来长按直接进「应用信息」，现在应用信息变成更多菜单里的第四块。
+                        // 走和上面短按同一套收尾：`leaveToolsMemory()` 把"上滑回哪一屏"
+                        // 定成函数列表（这一屏就是从列表长按进来的），然后落到 `Route.MoreSettings`。
+                        onLongPressSettings = {
                             state.leaveToolsMemory()
-                            state.route = Route.List
+                            state.route = Route.MoreSettings
                         },
-                        // 左上角文件夹 → 「函数文件」列表（这一轮新增的入口）
-                        onOpenSaves = { state.openSaves() },
-                        // ---- 工具条上那对箭头（本轮新增，和第一屏**逐项同构**）----
-                        // 第二屏的 🗑（清屏 / 长按清空全部）同样是"有意义的改动"，
-                        // 同样会被记进同一个历史栈，所以这里的两个回调与第一屏一字不差。
+                        onSwipeDown = { state.leaveToolsMemory(); state.route = Route.Graph },
+                        // ---- 工具条上那对箭头：**唯一**的撤销入口（本轮）----
+                        //
+                        // 原来这里还有一条 `showUndo = …` / `onUndo = { … 五路分支 … }`
+                        // 给底部那条 2 秒「已删除 · 点此撤销」用。用户本轮明确要求
+                        // "把所有的撤销的 toast 提示都给删掉"，所以那一整块（连同 `GraphState`
+                        // 里五路备份、上一版那个 2 秒到期 effect）**全删了**；
+                        // 删除动作现在只管 `pushUndo` 记一步 + 弹一条纯提示的 toast。
+                        //
+                        // 栈空时**照样可点**，只是弹一句说明 —— 用户点了没反应是最难受的
+                        // （这条规矩在 `ToolbarUndoRedoMenu` 的参数说明里也写了一遍）。
                         canUndo = state.canUndo,
                         canRedo = state.canRedo,
                         onUndoStep = {
@@ -858,36 +1273,53 @@ fun GraphScreen(
                                 if (label == null) "没有可重做的操作" else "已重做：$label"
                             )
                         },
+                        // 长按 `+` = 把当前**全部函数信息**存成一个 `.fdf` 文件。
+                        // 不再切到图像界面（理由见上面 saveDialogVisible 那段注释）。
+                        // "清空全部"的能力仍然在功能界面右上角那个垃圾桶的长按上。
+                        onLongPressAdd = {
+                            saveError = null
+                            saveDialogVisible = true
+                            // 教程第 22 步：长按 + 把保存对话框叫出来
+                            Tutorial.report("save_dialog")
+                        },
+                        onColor = { id, index -> state.setColor(id, index) },
+                        showPresets = settings.showPresets,
+                        presets = presetsFor(settings.coordinateSystem),
+                        sliders = state.sliders,
+                        onSliderValue = { id, v -> state.setSliderValue(id, v) },
+                        onSliderPlayToggle = { id -> state.toggleSliderPlaying(id) },
+                        onSliderEdit = { id ->
+                            // 长按滑动条行 → 滑动条的属性编辑界面（#4）：
+                            // 名称（参数字母）、下界、上界、步长。
+                            // 短按仍然什么都不做 —— 这条行天生就是用来拖的。
+                            state.route = Route.SliderProperties(id)
+                        },
+                        // 左滑滑动条行（滑轨和播放键以外的地方）→ 删掉它。
+                        // 撤销走**唯一**那条路：`removeSlider` 在改动前 `pushUndo` 记一步
+                        // （快照里有整条滑动条），用工具条上的左箭头就能整条要回来；
+                        // 同时弹一条纯提示的「已删除滑动条 a」。
+                        onSliderDelete = { id -> state.removeSlider(id) },
+                        // ---- 几何对象（#9）：度量/描点等结果也要在函数列表里看得见 ----
+                        // 注意**不要**把 `complexResultPoints()` 也加进来：复平面下
+                        // 那些"数值运算"本来就是列表里的行（functions），再加一遍会重复显示。
+                        objects = state.objects,
+                        onObjectColor = { id, index -> state.setObjectColor(id, index) },
+                        onObjectToggleVisible = { id -> state.toggleObjectVisible(id) },
+                        onObjectToggleValue = { id -> state.toggleObjectShowValue(id) },
+                        onObjectDelete = { id -> state.removeObject(id) },
+                        // 左边缘往右滑 → 进「功能界面」（#9 的入口手势）
+                        onSwipeToTools = { state.openTools() },
                         rotary = rotary
                     )
-                }
+                    // 上面那层 `CompositionLocalProvider`（对象行 `123` 的动作）到此结束
+                    }
+                    }
+                )
 
-                // ---- 「函数文件」列表（第二屏左上角文件夹按钮进来）----
+                // ---- 「功能界面」（#9）----
                 //
-                // **这一屏是普通一屏：自己的黑底，没有任何底图、也没有模糊。**
-                //
-                // 上一轮这里被做成了"浮在模糊的函数图像界面上的一层"
-                // （底下是一个 `GraphRoute(backdrop = true)` + 30% 的模糊），
-                // 但用户要的底图是**保存浮窗**那一处，不是这里。所以整套摘掉了：
-                //   * 不再组合 `GraphRoute`：连"多画一遍图"的代价都没有了，
-                //     也不再需要那两个本来只为它存在的"垫在黑底上的遮罩"分支；
-                //   * `SavesScreen` 的根节点**自己**补了一层不透明纯黑 ——
-                //     它原来"没有背景"正是为了让底图透出来；底图一走，那个
-                //     "没有背景"就变成了漏底（转场时会把上一屏透出来），
-                //     所以黑底这件事现在由 `SavesScreen` 自己保证（见那边的注释）。
-                //
-                // 「文件列表 = 黑底普通一屏」和「保存浮窗 = 模糊的函数图像底图」
-                // 现在是**两条完全不同**的路径，正是用户要的行为差异：
-                //   * 这条（功能界面左上角文件夹 → `state.openSaves()`）→ 本分支；
-                //   * 那条（第一屏长按 `+` → `saveDialogVisible`）→ 见本文件里
-                //     "保存浮窗的底图"那一段，它**不经过路由**。
-                //
-                // 打开文件的那一路（onOpen）仍然是"整体装回应用状态 → 回函数列表"，
-                // 细节见 GraphState.loadFileState。
-                //
-                // 这一屏**自己拦返回键**（见 `SavesScreen` 里的 BackHandler），
-                // 所以这里不再套一层 —— 两层的语义完全一样（都回功能界面），
-                // 多一层只会让"哪个先拿到返回"变得不好读。
+                // 它**没有设置键、没有 + 键**（用户明确要求），只能回图像界面。
+                // 返回键在这里也回图像界面（和列表不同：列表是首屏、不拦返回键）。
                 Route.Saves -> SavesScreen(
                     metrics = metrics,
                     onOpen = { entry ->
@@ -908,27 +1340,6 @@ fun GraphScreen(
                     rotary = rotary
                 )
 
-                Route.Graph -> {
-                    // 工具取到一半时按返回：**先退出工具**（回到「移动」），
-                    // 再按一次才离开图像界面。理由和"先取消再退出"一样 ——
-                    // 直接跳走会把半截选择留在状态里，用户下次进来看到
-                    // 莫名其妙的残留高亮。没有工具在跑时行为和以前一样，回函数列表。
-                    BackHandler {
-                        if (state.isMoveTool) {
-                            state.leaveToolsMemory()
-                            state.route = Route.List
-                        } else {
-                            state.backToMove()
-                            state.showToast("已退出${state.activeTool.label}")
-                        }
-                    }
-                    // 保存**图像**那条路（SaveImageDialog + GraphCapture）这一轮不再接在
-                    // 长按 `+` 上（用户改成了保存函数文件），所以这里也不再弹提示框。
-                    // `capture` 仍然一路传到画布：`ImageExport.kt` 是明确要求保留的，
-                    // 将来恢复"存图"只要在这里再挂一个对话框、调 `capture.savePng`。
-                    GraphRoute(state, metrics, geometry, viewport, settings, graphCapture)
-                }
-
                 // ---- 「应用信息」页（本轮新增：第一屏**长按 ⚙** 进来）----
                 //
                 // 用户原话："长按之后打开应用信息页面（不要有标题）……注意动画和打开文件列表
@@ -944,15 +1355,22 @@ fun GraphScreen(
                 //
                 // 转场：**和「函数文件」列表同一条分支**（`transitionSpec` 里那段
                 // `targetState is Route.Saves || targetState is Route.About … -> softScreenTransition()`）。
+                //
+                // ⚠️ **本轮的返回落点改了**（从"应用信息"变成"更多菜单里的第四块"）：
+                // 现在它不再是长按 ⚙ 直达的叶子屏，而是「更多菜单 → 应用信息」走了一层，
+                // 所以返回要回**更多菜单**，不能直接跳回列表（否则用户会丢掉上一层）。
+                // 左上角返回键与系统返回键两条路都必须回同一处 —— 这是这个 App 的规矩
+                // （`FunctionEditor` 的 × 和系统返回也用同一个 `cancelEdit`）。
                 Route.About -> {
-                    BackHandler { state.route = Route.List }
+                    BackHandler { state.route = Route.MoreSettings }
                     AboutScreen(
                         metrics = metrics,
-                        onBack = { state.route = Route.List },
+                        onBack = { state.route = Route.MoreSettings },
                         // 表冠：这一屏现在是**可滚动列表**（图标 + 七行装不下 233dp 的圆屏），
                         // 接法和设置页 / 函数列表 / 文件列表一字不差；不接的话这一屏
                         // 就只能用手指划（手表上手指划列表本来就别扭）。
-                        rotary = rotary
+                        rotary = rotary,
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
                     )
                 }
 
@@ -962,7 +1380,31 @@ fun GraphScreen(
                         // 设置页编辑的是**草稿**：坐标系的切换要等退出设置才生效
                         settings = settingsDraft ?: settings,
                         metrics = metrics,
-                        onChange = { settingsDraft = it },
+                        // ---- 3.44：改草稿的同时，把背景立刻重做一张 ----
+                        //
+                        // 用户连着两轮的反馈：
+                        // > "设置里关闭模糊背景再打开之后和调整模糊程度之后还是不会重新绘制，
+                        // >  要等到回到函数列表界面才重新绘制"
+                        //
+                        // 根因就在这里：设置页写的是**草稿**（`settingsDraft`），
+                        // 只有在 `commitSettings()`（退出设置）时才写进 `state.settings`，
+                        // 而重绘的 `LaunchedEffect` 看的是 `state.settings` ——
+                        // 所以"在设置页里改"对背景来说什么都没发生，直到退出。
+                        //
+                        // 修法：在这个回调里，**当场**按草稿的新值重做一张。
+                        // 两种原因分开报，晕染动画只在各自的"第一次"播：
+                        //   * 开关从关切到开 → [BackdropReason.TOGGLED_ON]
+                        //   * 模糊程度变了    → [BackdropReason.STRENGTH]
+                        // 其余设置（网格/坐标轴/主题…）→ [BackdropReason.OTHER]，不播。
+                        //
+                        // ⚠️ 为什么不在退出时补：用户要的就是"按下的那一刻背景就变了"。
+                        // 设置页背后本来就贴着这张全局图（见下面 `GlobalBackdrop` 那段），
+                        // 所以新图会立刻在**设置页自己的背景**上看到效果 —— 这才是"所见即所得"。
+                        onChange = { next ->
+                            val prev = settingsDraft ?: settings
+                            settingsDraft = next
+                            requestBackdropForSettings(prev, next)
+                        },
                         // 表冠：设置页现在是**可滚动列表**（7 行 × 48dp 装不下 233dp 的圆屏），
                         // 表冠要能滚它 —— 接法和其他可滚屏一字不差（FunctionList / SavesScreen /
                         // AlphabetKeyboard 都是这么传的），不接的话这一屏就只能用手指划。
@@ -970,12 +1412,180 @@ fun GraphScreen(
                         // 注意：这里**不再**有 onMessage —— 依赖系统版本的设置在本机不支持时
                         // 是"那一行不显示 + 值被压成安全默认"，不需要给用户弹任何提示
                         // （规则见 SettingsScreen 顶部与 GraphState 里的 GatedSetting）。
-                        onBack = { commitSettings() }
+                        onBack = { commitSettings() },
+                        // ---- 3.44：设置页也要能看到那张模糊背景 ----
+                        //
+                        // 用户原话："设置也要有模糊背景啊。"
+                        //
+                        // 传的是**草稿**的开关值（不是 `state.settings`）：用户在这一屏
+                        // 刚把开关打开的那一刻，背景就该立刻透上来 —— 等退出才变的话，
+                        // 他看到的是"打开了但没反应"，正是这一轮报的毛病。
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
+                    )
+                }
+
+                // ---- 「更多菜单」（长按 ⚙）：四个入口行 ----
+                //
+                // 用户原话："把那些设置放到长按设置键的更多菜单里，分四个大块，
+                // 点进去再设置。" 四块 = 表冠适配 / 触摸设置 / 主题设置 / 应用信息，
+                // 各自点进去是下面的子页，返回都回本屏。
+                //
+                // 返回键回**列表**（这一屏就是从列表长按进来的，`leaveToolsMemory()`
+                // 已经把"上滑回哪一屏"定成列表了）—— 和原来长按直接进应用信息时一致。
+                Route.MoreSettings -> {
+                    BackHandler { state.route = Route.List }
+                    MoreSettingsScreen(
+                        metrics = metrics,
+                        onBack = { state.route = Route.List },
+                        onCrown = { state.route = Route.CrownSettings },
+                        onCalc = { state.route = Route.CalcSettings },
+                        onTouch = { state.route = Route.TouchSettings },
+                        onTheme = { state.route = Route.ThemeSettings },
+                        onAbout = { state.route = Route.About },
+                        // 「开发者模式」那一栏只在开了开发者模式时出现（见 MoreSettingsScreen）。
+                        developerMode = AppPrefs.developerMode,
+                        onDeveloper = { state.route = Route.Developer },
+                        onReplayTutorial = {
+                            // 已有同名 test 文件时先问一句（教程自己要存一个 test）
+                            val hasTest = FunctionFileStore.list(context).any { it.baseName == "test" }
+                            if (hasTest) {
+                                replayAsk = true
+                            } else {
+                                state.leaveToolsMemory()
+                                state.route = Route.List
+                                Tutorial.start(Route.List)
+                            }
+                        },
+                        rotary = rotary,
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
+                    )
+                }
+
+                // ---- 「表冠适配」子页（更多菜单第一块）----
+                //
+                // 表冠模式 + 灵敏度滑条。改动**即时生效**（不等退出、不进草稿）：
+                // 表冠没有"退出才生效"的语义，而模式 / 灵敏度恰恰要马上能试手感。
+                // 落盘走自动存档（`LaunchedEffect` 里那 700ms 防抖），
+                // MainActivity 下次 onResume 会从存档读到新值。
+                Route.CrownSettings -> {
+                    BackHandler { state.route = Route.MoreSettings }
+                    CrownSettingsScreen(
+                        settings = settings,
+                        // 屏幕形状是应用级偏好（AppPrefs），不属于 WatchSettings：
+                        // 点一下就写盘、全场重组，所以这里直接读写它。
+                        shape = AppPrefs.screenShape,
+                        metrics = metrics,
+                        onChange = { applySettingsChange(it) },
+                        onScreenShape = { AppPrefs.setScreenShape(context, it) },
+                        onBack = { state.route = Route.MoreSettings },
+                        rotary = rotary,
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
+                    )
+                }
+
+                // ---- 「计算设置」子页（更多菜单里紧跟「手表适配」）----
+                //
+                // 只调计算精度（3 / 8 / 16 位小数）：改动**即时生效**（不进草稿），
+                // 和表冠设置同一条路；`Calc.precision` 由上面那个 `SideEffect` 同步。
+                Route.CalcSettings -> {
+                    BackHandler { state.route = Route.MoreSettings }
+                    CalcSettingsScreen(
+                        settings = settings,
+                        metrics = metrics,
+                        onChange = { applySettingsChange(it) },
+                        onBack = { state.route = Route.MoreSettings },
+                        rotary = rotary,
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
+                    )
+                }
+
+                // ---- 「触摸设置」子页（更多菜单第二块）----
+                Route.TouchSettings -> {
+                    BackHandler { state.route = Route.MoreSettings }
+                    TouchSettingsScreen(
+                        settings = settings,
+                        metrics = metrics,
+                        onChange = { applySettingsChange(it) },
+                        onBack = { state.route = Route.MoreSettings },
+                        rotary = rotary,
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
+                    )
+                }
+
+                // ---- 「开发者模式」子页（更多菜单末尾，仅开发者模式开着时出现）----
+                //
+                // 三件事：关掉开发者模式（当场退出这一屏，入口随之消失）、
+                // 回到初始界面（= 重看欢迎流程）、恢复默认设置。
+                Route.Developer -> {
+                    BackHandler { state.route = Route.MoreSettings }
+                    DeveloperScreen(
+                        metrics = metrics,
+                        onBack = { state.route = Route.MoreSettings },
+                        onDisableDeveloper = {
+                            AppPrefs.setDeveloperMode(context, false)
+                            // 立刻退二级菜单：这个入口本身已经不该存在了
+                            state.route = Route.MoreSettings
+                        },
+                        onRestartOnboarding = {
+                            // AppRoot 读 onboarded，置 false 之后整棵树就换回欢迎页
+                            AppPrefs.requestOnboarding(context)
+                        },
+                        onResetSettings = {
+                            // 用 restoreSettings 而不是 updateSettings：
+                            // 后者在坐标系变化时会清空函数列表，而这里要求"保留函数列表"。
+                            state.restoreSettings(WatchSettings())
+                            // 屏幕形状回到设备默认（和全新安装时的取值同一条规则）
+                            AppPrefs.setScreenShape(
+                                context,
+                                if (context.resources.configuration.isScreenRound) {
+                                    ScreenShape.ROUND
+                                } else {
+                                    ScreenShape.SQUARE
+                                }
+                            )
+                            state.showToast("已恢复默认设置")
+                        },
+                        rotary = rotary,
+                        backdropVisible = (settingsDraft ?: settings).blurBackdrop
+                    )
+                }
+
+                // ---- 「主题设置」子页（更多菜单第三块）----
+                //
+                // 夜间模式：点一下 `state.updateSettings` 立刻改 `settings.dayMode`，
+                // 而整个界面的主题外壳（`FunctionDrawerTheme(dayMode = …)`）读的就是
+                // 这个值 —— 所以这一屏自己当场就从夜间黑底切成白天白纸（或反过来），
+                // 不需要退回列表再进来。
+                Route.ThemeSettings -> {
+                    BackHandler { state.route = Route.MoreSettings }
+                    ThemeSettingsScreen(
+                        settings = settings,
+                        metrics = metrics,
+                        // 每一格都更新数值（UI 跟手），重绘由下面的 onStrengthCommit 负责。
+                        onChange = { applySettingsChange(it) },
+                        onBack = { state.route = Route.MoreSettings },
+                        rotary = rotary,
+                        // ---- 3.45：这一屏也要看到那张模糊背景 ----
+                        //
+                        // 它和设置页一样是**整屏路由**，压在全局背景层上面。
+                        // 之前它只在液态玻璃主题下加半透明遮罩，Material 主题就是纯色 ——
+                        // 用户看到的就是"只有白色背景"。
+                        backdropVisible = settings.blurBackdrop,
+                        // 松手（或点一下滑轨）才重做一张。拖动中每格都卷积会卡，
+                        // 而这一屏本来就没有"跟手看到糊度"的必要。
+                        //
+                        // ⚠️ 必须用 `requestAt` 把**松手时那个值**递进去：
+                        // 此刻 `state.settings` 刚被 `onChange` 改过，但
+                        // `rememberUpdatedState` 还没走到下一次组合，用
+                        // `requestFor` 会拿到旧值 —— 表现就是"松手了但糊度没变"。
+                        onStrengthCommit = { v ->
+                            BackdropImage.requestAt?.invoke(v, BackdropReason.STRENGTH)
+                        }
                     )
                 }
 
                 is Route.Editor -> {
-                    val fn: PlotFunction? = functions.firstOrNull { it.id == route.id }
+                    val fn: PlotFunction? = functions.firstOrNull { it.id == routeKey.id }
                     // ---- 打开编辑器那一刻的**原值**（× = 真正的取消）----
                     //
                     // 用户报："函数编辑页面，点击×也会保存编辑结果。"
@@ -983,10 +1593,10 @@ fun GraphScreen(
                     // 这样图像界面能实时跟着变），所以"取消"不能只是"退回去" ——
                     // 必须把这条函数**还原**成进来时的样子。
                     //
-                    // `remember(route.id)`：只在这个路由第一次组合时抓一次快照，
+                    // `remember(routeKey.id)`：只在这个路由第一次组合时抓一次快照，
                     // 之后的重组（每次按键都会重组）不会覆盖它。
-                    // 键用 route.id 而不是 fn.id：退出再进来（同一个 id）要重新抓一次。
-                    val original = remember(route.id) { fn }
+                    // 键用 routeKey.id 而不是 fn.id：退出再进来（同一个 id）要重新抓一次。
+                    val original = remember(routeKey.id) { fn }
                     // 取消 = 还原 + 回列表。刚新建的那种直接丢掉（本来就不该存在，
                     // 也不产生撤销记录）。
                     val cancelEdit: () -> Unit = {
@@ -1113,11 +1723,11 @@ fun GraphScreen(
                 // 分派就是"先查函数、再查对象"（两条列表都很小，查找代价可以忽略），
                 // 都查不到才按原样回列表 —— 那种情况是"它刚在别处被删掉了"。
                 is Route.Properties -> {
-                    val fnTarget = functions.firstOrNull { it.id == route.id }
+                    val fnTarget = functions.firstOrNull { it.id == routeKey.id }
                     // 命中函数时**不再去对象表里找**：一个 id 只可能属于一个东西，
                     // 多查一次只会让"万一两份数据打架"变成一件说不清的事。
                     val objTarget = if (fnTarget == null) {
-                        state.objects.firstOrNull { it.id == route.id }
+                        state.objects.firstOrNull { it.id == routeKey.id }
                     } else {
                         null
                     }
@@ -1155,7 +1765,7 @@ fun GraphScreen(
                             // 这个东西在别处被删掉了（比如在列表里滑删之后又退回来）：
                             // 直接回列表。用 LaunchedEffect 而不是在组合里直接赋值 ——
                             // 组合期间写状态会白白多触发一次重组。
-                            LaunchedEffect(route) { state.route = Route.List }
+                            LaunchedEffect(routeKey) { state.route = Route.List }
                             Box(Modifier.fillMaxSize())
                         }
                     }
@@ -1176,13 +1786,13 @@ fun GraphScreen(
                 // 永远不会把用户送到这一屏来 —— 万一真出现一个"查不到的 id"
                 // （比如对象刚在别处被删掉），就按下面 `null` 那一支回列表。
                 is Route.Details -> {
-                    val target = state.objects.firstOrNull { it.id == route.id }
+                    val target = state.objects.firstOrNull { it.id == routeKey.id }
                     BackHandler { state.route = Route.List }
                     if (target == null) {
                         // 这个东西在别处被删掉了（比如在详情页开着时列表里把它滑删了）：
                         // 直接回列表。用 LaunchedEffect 而不是在组合里直接赋值 ——
                         // 组合期间写状态会白白多触发一次重组（和 Properties 那一支同一条规矩）。
-                        LaunchedEffect(route) { state.route = Route.List }
+                        LaunchedEffect(routeKey) { state.route = Route.List }
                         Box(Modifier.fillMaxSize())
                     } else {
                         ObjectDetailsScreen(
@@ -1195,10 +1805,10 @@ fun GraphScreen(
 
                 // ---- 滑动条的属性编辑（#4）----
                 is Route.SliderProperties -> {
-                    val target = sliders.firstOrNull { it.id == route.id }
+                    val target = sliders.firstOrNull { it.id == routeKey.id }
                     BackHandler { state.route = Route.List }
                     if (target == null) {
-                        LaunchedEffect(route) { state.route = Route.List }
+                        LaunchedEffect(routeKey) { state.route = Route.List }
                         Box(Modifier.fillMaxSize())
                     } else {
                         SliderPropertyEditorScreen(
@@ -1225,6 +1835,8 @@ fun GraphScreen(
                 }
                 }
             }
+                }
+                }
 
             // ---- 保存浮窗的底图：**一张加了高斯模糊的函数图像** ----
             //
@@ -1276,39 +1888,20 @@ fun GraphScreen(
                         .fillMaxSize()
                         .background(MaterialTheme.colors.background)
                 ) {
-                    GraphRoute(
-                        state = state,
-                        metrics = metrics,
-                        geometry = geometry,
-                        viewport = viewport,
-                        settings = settings,
-                        capture = graphCapture,
-                        backdrop = true,
-                        // Unbounded：底图是满屏的，被模糊的曲线不该在边缘被切一刀。
-                        // 半径是[SAVE_BACKDROP_BLUR_FRACTION]（233dp 屏上 ≈ 15.1dp）。
-                        modifier = Modifier.blur(
-                            radius = metrics.sizeDp * SAVE_BACKDROP_BLUR_FRACTION,
-                            edgeTreatment = BlurredEdgeTreatment.Unbounded
-                        )
-                    )
-                    // `Modifier.blur` 在 **Android 12（API 31）以下是个空操作**，
-                    // 本项目 minSdk 是 24 —— 那些机器上底图会是一张**清清楚楚**的
-                    // 函数图像，浮窗压在上面就少了"底图退到后面去"这一层。
-                    // 低版本没有等价的公开 API（`RenderEffect` 也是 API 31 才有，
-                    // 而且它对"整个 composable 层"没有 Compose 侧的入口），
-                    // 所以退化成一个半透明黑遮罩：它不是模糊，但同样把底图压后一档，
-                    // 并且让"这一层不可操作"一眼可辨 —— 和这个 App 其它"按版本降级"
-                    // 的做法一致（能做就做，做不到就给一个明显更安全的默认，并写清楚）。
+                    // 3.36：底图用 BlurView（和抽屉 / 非抽屉页同一份实现）。
                     //
-                    // 浓度取 0.45 而不是别处那种 0.7 上下，理由写在这个常量自己的
-                    // 注释里（浮窗那张 75% 的遮罩会和它是**叠乘**的）。
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = SAVE_BACKDROP_MASK_ALPHA))
-                        )
+                    // 关掉模糊背景时**不画**这一层：只剩下面那层黑色遮罩压在不透明的
+                    // 主题底色上，也就是"不模糊"那一套的统一观感。
+                    if (state.settings.blurBackdrop) {
+                        // 同一张全局静态图（保存浮窗也只是个"贴图"而已）。
+                        GlobalBackdrop(modifier = Modifier.fillMaxSize())
                     }
+                    // 压后一档：和抽屉那层 10% tint 同理，让浮窗文字始终有对比度。
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = SAVE_BACKDROP_MASK_ALPHA))
+                    )
                 }
             }
 
@@ -1343,7 +1936,8 @@ fun GraphScreen(
                     // 默认名字留空：用户想自己起名的话点一下输入框就能打
                     // （**刻意不自动弹输入法**：这块表的系统输入法可能占满整屏，
                     //  一进来就弹的话取消/确定又被挡住 —— 见 `NameDialog` 的注释）
-                    initialName = "",
+                    // 教程第 23 步要自动填 `test`（见 TutorialStep.autoFillName）
+                    initialName = Tutorial.autoFillName() ?: "",
                     hint = "输入文件名",
                     errorText = saveError,
                     saving = savingFile,
@@ -1378,6 +1972,10 @@ fun GraphScreen(
                                         "已保存 ${FunctionFileFormat.displayName(file.name)}" +
                                             "（${FunctionFileFormat.fileSizeText(file.length())}）"
                                     )
+                                    // 教程第 23/24 步：存好了（saved 推进到"存好了"，
+                                    // toast 那一步再靠 toast 自己推进）
+                                    Tutorial.report("saved")
+                                    Tutorial.report("toast")
                                 }
                             }
                         }
@@ -1438,6 +2036,8 @@ fun GraphScreen(
                     .width(bandWidth(metrics, geometry, isRound, 0.84f, 0.84f, arcMargin = 0.92f))
                     // 定高 = 撤销条那一档：圆角（PillShape 的 50%）因此不再是"跟着文字变"的
                     .height(metrics.sizeDp * FLOAT_PILL_H)
+                    // 教程第 24 步（"存好了"）要圈住这条提示
+                    .tutorialAnchor(TutorialAnchors.TOAST)
             ) {
                 FloatPill(
                     text = state.toast.orEmpty(),
@@ -1557,6 +2157,312 @@ fun GraphScreen(
                     }
                 }
             }
+
+            // ==================================================================
+            // 新手教程（Tutorial）
+            // ==================================================================
+            //
+            // 教程的全部状态在 `Tutorial` 里（一个进程级单例），这里只做三件事：
+            //   1. 把路由变化喂给它（哪几步靠"用户真的走过去了"推进）；
+            //   2. 把它需要反向操作界面的钩子接上（上一步 / 退出时要撤销掉实际动作）；
+            //   3. 自动编排那几拍（看曲线画出来 / 看坐标数字 / 看工具列表滚一遍）。
+            //
+            // 浮层 `TutorialOverlay` 画在**最后**：它是全屏 Box，自己内部再分层
+            // （压暗幕 → 挡板 → 高亮圈 → 卡片），压在所有界面之上。
+
+            LaunchedEffect(state.route) { Tutorial.onRoute(state.route) }
+
+            // ---- 反向操作的钩子 ----
+            DisposableEffect(Unit) {
+                // 用户跑到了本步不该去的主路由：退回教程开始时那一屏（步号不变）
+                Tutorial.onFailRestore = {
+                    state.route = Tutorial.entryRoute ?: Route.List
+                }
+                // "上一步"：参数是**正要离开的那一步**，把它做过的事撤掉
+                //
+                // 两类都算"做过的事"：
+                //   * **操作**（隐显 / 颜色 / 删除 / 保存 / 选中）→ 直接反向做一遍；
+                //   * **导航**（进设置 / 拉开抽屉 / 打开文件…）→ 回到那一步**开始时**那一屏，
+                //     否则用户回到上一步时看着"已经在目的地"的界面会无从下手。
+                Tutorial.onUndoStep = { undone ->
+                    when (undone) {
+                        // 新建函数（进编辑器）→ 回列表
+                        0 -> state.route = Route.List
+                        // 切到数字页 → 退回初等页
+                        5 -> Tutorial.setEditorPage?.invoke(KeyPage.ELEMENTARY)
+                        // 点 ✓ 回了图像界面 → 回编辑器
+                        7 -> state.route = Route.Editor(Tutorial.tutorialFnId)
+                        // 拉开的抽屉 → 收回去（"再看一遍画出来的过程"要站在图像上）
+                        8 -> state.route = Route.Graph
+                        9 -> state.route = Route.Graph
+                        // 色点藏起来 / 叫回来
+                        10 -> state.setVisible(Tutorial.tutorialFnId, true)
+                        11 -> state.setVisible(Tutorial.tutorialFnId, false)
+                        // 长按打开了调色板
+                        12 -> Tutorial.closeColorPanel?.invoke()
+                        // 左滑删掉了这一行（撤销栈里记着，直接撤回来）
+                        14 -> state.undo()
+                        // 两颗键之间横划唤出了撤销菜单 → 收起来
+                        15 -> Tutorial.closeUndoMenu?.invoke()
+                        // 进设置 → 回列表
+                        17 -> state.route = Route.List
+                        // 坐标数字打开了
+                        18 -> state.updateSettings(state.settings.copy(showNumbers = false))
+                        // 从设置退出来 → 回设置（这一步本来就是"点返回"）
+                        19 -> state.route = Route.Settings
+                        // 再把抽屉拉开 → 收回去
+                        21 -> state.route = Route.Graph
+                        // 长按 + 打开了保存对话框
+                        22 -> {
+                            saveDialogVisible = false
+                            saveError = null
+                        }
+                        // 存下了 test（这是本教程自己存的那一个，可以真删）
+                        // 删完把对话框重新打开：第 23 步本来就要停在"按下 ✓"上
+                        23 -> {
+                            FunctionFileStore.list(context)
+                                .firstOrNull { it.baseName == "test" }
+                                ?.let { FunctionFileStore.delete(it.file) }
+                            saveError = null
+                            saveDialogVisible = true
+                        }
+                        // 打开函数文件 → 回功能界面
+                        27 -> state.route = Route.Tools
+                        // 选中 test / 再点一下取消 / 长按进多选
+                        28 -> Tutorial.onRestoreSavesSelection?.invoke(Tutorial.SavesRestore.Clear)
+                        29, 30 -> Tutorial.onRestoreSavesSelection?.invoke(Tutorial.SavesRestore.SelectTest)
+                        // 按住垃圾桶"删掉"了 test（名义删除，这里放回列表）
+                        31 -> Tutorial.onRestoreDeletedFile?.invoke()
+                        // 退出文件列表 → 回文件列表（这一步本来就是"点返回"）
+                        32 -> state.route = Route.Saves
+                        // 长按齿轮进更多菜单 → 回列表
+                        34 -> state.route = Route.List
+                        // 打开主题设置 → 回更多菜单
+                        35 -> state.route = Route.MoreSettings
+                    }
+                }
+                // 教程结束：走完全程才真的删掉"名义删除"的文件；中途退出原样还回来
+                Tutorial.onStop = { completed ->
+                    if (completed) FunctionFileStore.dropStash() else FunctionFileStore.unstash()
+                }
+                onDispose {
+                    Tutorial.onFailRestore = null
+                    Tutorial.onUndoStep = null
+                    Tutorial.onStop = null
+                }
+            }
+
+            // ---- 自动编排 ----
+            //
+            // key 里带 `revision`：同一步重进（比如上一步又回来）也会重新播。
+            LaunchedEffect(Tutorial.step, Tutorial.revision) {
+                if (!Tutorial.active) return@LaunchedEffect
+                when (Tutorial.currentSpec?.action) {
+                    // 第 8 步：先压暗幕，等幕降完再画曲线，画完停 1 秒再升幕
+                    "reveal" -> {
+                        Tutorial.holdReveal = false
+                        Tutorial.spotlight = true
+                        // 等暗幕彻底降完（这一步的 dimDownMs 是 1460ms）
+                        delay(Tutorial.dimDownMs.toLong())
+                        // 让 GraphRoute 把揭示动画重新播一遍
+                        Tutorial.replayReveal?.invoke()
+                        // 绘制动画本身 520ms，多等一点余量
+                        delay(600)
+                        Tutorial.onRevealFinished()
+                        delay(1000)
+                        Tutorial.spotlight = false
+                        Tutorial.revealDone = true
+                        Tutorial.advance()
+                    }
+                    // 第 20 步：坐标数字已经打开，压暗幕停 2 秒给用户看清
+                    //
+                    // ⚠️ 先把抽屉收回去（回到图像界面）再停：抽屉整块铺在图像上面，
+                    // 不收回的话坐标轴和数字全被列表盖着，这一步等于白说。
+                    "coordinates" -> {
+                        if (state.route != Route.Graph) state.route = Route.Graph
+                        Tutorial.spotlight = true
+                        delay(2000)
+                        Tutorial.spotlight = false
+                        Tutorial.advance()
+                    }
+                    // 第 24 步：等"已保存"的 toast 出来；等不到就 3 秒兜底
+                    "toast" -> {
+                        var waited = 0L
+                        while (state.toast == null && waited < 3000L) {
+                            delay(100)
+                            waited += 100
+                        }
+                        delay(1200)
+                        Tutorial.advance()
+                    }
+                    // 第 26 步：工具列表自己先上后下滚一遍（用户手指被挡住）
+                    "tools_scroll" -> {
+                        Tutorial.spotlight = true
+                        Tutorial.blocksScroll = true
+                        Tutorial.scrollTools?.invoke()
+                        Tutorial.blocksScroll = false
+                        Tutorial.spotlight = false
+                        Tutorial.advance()
+                    }
+                }
+            }
+
+            // ---- 「半径·圆心」的半径输入面板 ----
+            //
+            // 面板整屏铺开（不透明底色），所以必须盖在画布/抽屉之上；
+            // 教程浮层排在它后面，保证教程进行中仍然压在最顶层。
+            if (state.radiusInputCenter != null) {
+                RadiusInputPanel(
+                    metrics = metrics,
+                    geometry = geometry,
+                    isRound = isRound,
+                    rotary = rotary,
+                    onConfirm = { text -> state.confirmRadiusInput(text) },
+                    onCancel = { state.cancelRadiusInput() }
+                )
+            }
+
+            // ---- 第一次按滑动条播放键的提示（装一次只弹一次）----
+            //
+            // 用户要求："给第一次播放提示条做个弹窗提示，提示要回到函数图像界面
+            // 才开始播放。" 播放键在抽屉（函数列表）里，所以这个框必须画在抽屉**之上** ——
+            // 放在本层（`TabDeck` 的兄弟节点）而不是 `GraphRoute` 里面。
+            // 弹出时机由 `GraphState.toggleSliderPlaying` 置位，关掉时落
+            // `AppPrefs.sliderPlayHintShown`，之后永不再弹。
+            if (state.sliderPlayHint) {
+                // 遮罩：吃掉点击，免得误触到底下的抽屉
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { }
+                )
+                Surface(
+                    color = KeyPalette.bubble,
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .width(bandWidth(metrics, geometry, isRound, 0.5f, 0.5f, arcMargin = 0.94f))
+                        .border(1.dp, KeyPalette.bubbleBorder, MaterialTheme.shapes.large)
+                ) {
+                    Column(modifier = Modifier.padding(metrics.sizeDp * 0.042f)) {
+                        Text(
+                            text = "回到图像界面才播放",
+                            fontSize = metrics.fontBody,
+                            color = KeyPalette.text
+                        )
+                        Spacer(Modifier.height(metrics.sizeDp * 0.014f))
+                        Text(
+                            text = "播放键只负责打开播放。把抽屉拉回去、" +
+                                "底部的提示条落到底之后，滑动条才会真的动起来；" +
+                                "播放时按住底部提示条会暂停，松手继续。",
+                            fontSize = metrics.fontTiny,
+                            color = KeyPalette.textMuted
+                        )
+                        Spacer(Modifier.height(metrics.sizeDp * 0.03f))
+                        Button(
+                            onClick = {
+                                state.dismissSliderPlayHint()
+                                AppPrefs.setSliderPlayHintShown(context)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = PillShape,
+                            colors = ButtonDefaults.buttonColors(
+                                backgroundColor = KeyPalette.accent,
+                                contentColor = KeyPalette.text
+                            )
+                        ) {
+                            Text("知道了", fontSize = metrics.fontSmall)
+                        }
+                    }
+                }
+            }
+
+            // ---- 教程浮层：必须在最上层 ----
+            if (Tutorial.active) {
+                TutorialOverlay(metrics = metrics, geometry = geometry)
+            }
+
+            // ---- 重玩教程前的一句确认（本地已有同名 test 文件）----
+            if (replayAsk) {
+                // 遮罩：吃掉点击，避免误触到底下的界面
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { }
+                )
+                Surface(
+                    color = KeyPalette.bubble,
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .width(metrics.sizeDp * 0.82f)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(metrics.sizeDp * 0.04f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "已经有一个 test 文件",
+                            fontSize = metrics.fontSmall,
+                            color = KeyPalette.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(metrics.sizeDp * 0.02f))
+                        Text(
+                            text = "重新开始教程会先删掉它。",
+                            fontSize = metrics.fontTiny,
+                            color = KeyPalette.textMuted,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(metrics.sizeDp * 0.03f))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(metrics.sizeDp * 0.022f)
+                        ) {
+                            Button(
+                                onClick = { replayAsk = false },
+                                modifier = Modifier.weight(1f),
+                                shape = PillShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    backgroundColor = KeyPalette.normal,
+                                    contentColor = KeyPalette.text
+                                )
+                            ) {
+                                Text("取消", fontSize = metrics.fontSmall)
+                            }
+                            Button(
+                                onClick = {
+                                    replayAsk = false
+                                    FunctionFileStore.list(context)
+                                        .firstOrNull { it.baseName == "test" }
+                                        ?.let { FunctionFileStore.delete(it.file) }
+                                    state.leaveToolsMemory()
+                                    state.route = Route.List
+                                    Tutorial.start(Route.List)
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = PillShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    backgroundColor = KeyPalette.danger,
+                                    contentColor = KeyPalette.text
+                                )
+                            ) {
+                                Text("删除后开始", fontSize = metrics.fontSmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
         }
     }
 }
@@ -1648,6 +2554,14 @@ private fun GraphRoute(
     val interactive = !backdrop
 
     /**
+     * 抽屉控制器。
+     *
+     * `CompositionLocal` 只能在 composable 作用域读，所以提到函数顶部读一次、
+     * 带进两个地方：滑动条播放门（[DrawerController.canPlay]）和底部上滑热区。
+     */
+    val drawerController = LocalDrawerController.current
+
+    /**
      * 「第一次用工具时的『回到移动』提示」**这一串界面里问过没有**。
      *
      * 设置那一头是 `settings.confirmReturnToMove`（"以后还要不要问"，落进存档）；
@@ -1663,6 +2577,92 @@ private fun GraphRoute(
     var revealIds by remember { mutableStateOf(emptySet<Long>()) }
     LaunchedEffect(state.functions, backdrop) {
         if (!backdrop) revealIds = state.consumeReveal(state.functions)
+    }
+
+    // 揭示动画进行中 = 底部提示条**锁住**（用户反馈 3：动画播完之前不许拖开抽屉）。
+    // 正常路径由 `GraphCanvas` 播完回调解锁；下面那条超时只是兜底，
+    // 防止这批函数根本画不出来（表达式报错 / 采样一直没到）时抽屉被永久锁死。
+    var revealRunning by remember { mutableStateOf(false) }
+    LaunchedEffect(revealIds) {
+        if (revealIds.isEmpty()) {
+            revealRunning = false
+            return@LaunchedEffect
+        }
+        revealRunning = true
+        delay(REVEAL_MS + 1000L)
+        revealRunning = false
+    }
+
+    // ---- 背景兜底：函数显隐 / 增删 / 外观变化后补一张（用户反馈 1 / 4 / 6）----
+    //
+    // 「背景」取的是画布那一层（`GraphCapture`），而画布只在输入变化时重绘。
+    // 下面两条是**非常窄**的触发，只在"内容真的变了"那一刻请求一次 ——
+    // 滑动、缩放、来回翻列表/功能界面都不会走到这里（性能敏感）。
+    //
+    // A. 纯外观（颜色/线型/线径）：它们不进采样 key，采样结果不会更新，
+    //    只能在这里直接请求（画布下一帧就会按新外观重画）。
+    val backdropStyleKey = state.functions.map {
+        listOf(it.id, it.colorIndex, it.lineStyle, it.widthScale)
+    }
+    LaunchedEffect(backdropStyleKey, backdrop) {
+        if (backdrop || !state.settings.blurBackdrop) return@LaunchedEffect
+        BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+    }
+
+    // B. 显隐 / 增删：它们会让采样重跑，**立刻**请求拍到的是改之前那一帧
+    //    （用户看到的正是"隐藏了曲线还在 / 显示后背景里没有"）。
+    //    所以先记一个待办，等 `state.plot` 换成新的一帧再请求。
+    //    冷启动也走这条路：第一次采样出结果时补一张，列表底下才有曲线。
+    val backdropSamplingKey = state.functions.map { listOf(it.id, it.visible) }
+    var backdropPending by remember { mutableStateOf(false) }
+    var plotEverHadCurves by remember { mutableStateOf(false) }
+    LaunchedEffect(backdropSamplingKey, backdrop) {
+        if (backdrop) return@LaunchedEffect
+        backdropPending = true
+    }
+    LaunchedEffect(state.plot, backdrop) {
+        if (backdrop || !backdropPending) return@LaunchedEffect
+        if (state.plot.curves.isNotEmpty()) plotEverHadCurves = true
+        // 冷的启动那一小段：采样还没出结果，别把这次请求机会用掉。
+        if (!plotEverHadCurves) return@LaunchedEffect
+        backdropPending = false
+        if (!state.settings.blurBackdrop) return@LaunchedEffect
+        BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+    }
+
+    // C. 从图像界面回到列表 / 功能界面时补一张（用户反馈 1：来回切背景不刷新）。
+    //    只认 **Graph → List/Tools** 这一种跳转；List ⇄ Tools 之间横滑不触发。
+    var prevRoute by remember { mutableStateOf(state.route) }
+    LaunchedEffect(state.route, backdrop) {
+        val from = prevRoute
+        prevRoute = state.route
+        if (backdrop || !state.settings.blurBackdrop) return@LaunchedEffect
+        val to = state.route
+        if (from is Route.Graph && (to is Route.List || to is Route.Tools)) {
+            BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+        }
+    }
+
+    // D. 教程第 8 步"再看一遍画出来的过程"播完后也补一张（用户点名过的触发条件）。
+    LaunchedEffect(Tutorial.revealVersion) {
+        if (Tutorial.revealVersion == 0) return@LaunchedEffect
+        if (backdrop || !state.settings.blurBackdrop) return@LaunchedEffect
+        BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+    }
+
+    // 教程第 8 步要"再看一遍画出来的过程"：先清空、下一帧再放回去，
+    // 上面那条 `LaunchedEffect(revealIds)` 才会真的重播（同一个 set 是不会重启的）。
+    val revealScope = rememberCoroutineScope()
+    DisposableEffect(Unit) {
+        Tutorial.replayReveal = {
+            val id = Tutorial.tutorialFnId
+            revealIds = emptySet()
+            revealScope.launch {
+                withFrameNanos { }
+                revealIds = setOf(id)
+            }
+        }
+        onDispose { Tutorial.replayReveal = null }
     }
 
     /**
@@ -1689,6 +2689,19 @@ private fun GraphRoute(
             delay(SLIDER_PLAY_TICK_MS)
             val cur = state.sliders.firstOrNull { it.id == playingSlider.id } ?: break
             if (!cur.playing) break
+            // ---- 播放门（用户要求）----
+            //
+            // > "把滑动条做成完全回到函数图像界面（提示条到底部）才开始播放，
+            // >  在函数图像界面按到提示条就暂停播放，松手继续。"
+            //
+            // 抽屉没完全收起（还停在列表 / 功能界面，或正在拖动 / 吸附途中），
+            // 或者手指正按在底部提示条上 —— 这一拍**不推进**：值原地不动，
+            // 松手 / 回到图像界面后从当前值继续（不是重新开始）。
+            // 暂停期间也把 `interacting` 放掉，别让采样一直压在 FAST 档上。
+            if (drawerController != null && !drawerController.canPlay()) {
+                state.interacting = false
+                continue
+            }
             val next = cur.advance(direction)
             if (next == null) direction = -direction else state.setSliderValue(cur.id, next)
             // 播放期间当作"手指还在动"：采样降到 FAST。
@@ -1703,10 +2716,10 @@ private fun GraphRoute(
      *
      * ⚠️ 提到**函数顶部**来声明（原来它是在下面那张卡旁边就地声明的）：浮层/按键的
      * **宽度**也要用它（见 [rowWidth] 与"第一次用工具"那个确认框），两处都要同一个值，
-     * 就地声明会变成两块地方各自读一次 `LocalConfiguration`（而且底下那一处会和这里
+     * 就地声明会变成两块地方各自读一次 `isRoundScreen()`（而且底下那一处会和这里
      * 重名、被 Kotlin 报 name shadowing）。
      */
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
 
     /**
      * 浮层 / 按键的宽度：**圆屏走弧宽、非圆屏走真实屏宽**。
@@ -1816,8 +2829,26 @@ private fun GraphRoute(
             // 两类分开传：否则用户点三个点做角度时，分不清哪个是"刚选的"、
             // 哪个是曲线自己的交点/极值点。
             secondaryHighlightPoints = toolPoints,
+            // 揭示动画播完：解锁抽屉拖动 + 补一张背景（见上面 `revealRunning` 的注释）。
+            onRevealFinished = {
+                revealRunning = false
+                if (!backdrop && state.settings.blurBackdrop) {
+                    BackdropImage.requestFor?.invoke(BackdropReason.OTHER)
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
+                // ---- 3.41：绘制完成的信号源，必须挂在**图层录制之内、之前** ----
+                //
+                // 顺序说明（`Modifier` 链是"外层在前"）：
+                //   `DrawnTicker` 在最外层 → 先执行；
+                //   `capture.modifier` 在里层 → 后执行（录制 + 画到屏幕）。
+                //
+                // 这样 `DrawnTicker` 计一次数时，**这一帧的录制已经做完了**
+                // （`drawContent()` 里包含里层那一整串）。取图方等的就是这个时刻。
+                //
+                // 反过来挂（计数在内层）会在录制之前就唤醒，等于白等。
+                .then(DrawnTicker.modifier)
                 // 抓图（#8）：录到的就是这一层（网格/曲线/几何对象），不含任何浮层
                 .then(capture.modifier)
                 // ================= 手势 1：描点（按下就出点、松手才定住）=================
@@ -1868,6 +2899,77 @@ private fun GraphRoute(
                             if (cancelled) state.cancelPendingPoint()
                         }
                     }
+                )
+                // ================= 手势 1b：拖动已经放下的点 =================
+                //
+                // 用户原话："实心的点在点击之后可以拖动来改变它的位置，或者长按它直接拖动；
+                // 在函数曲线或者自绘曲线上描出来的实心的点也可以拖动……确保这个点一定在
+                // 之前描的曲线上。"
+                //
+                // 为什么单独一条手势、不并进手势 2：
+                //  * 这一条**只在按到点对象时**才认领，按在别处一个字节都不消费 ——
+                //    点选、双击重置视野、单指平移缩放全都照旧（那几条在内层，
+                //    收到的 down 没被消费）。
+                //  * 已选中的点：按下就拖（= "点击之后可以拖动"）；没选中的点：
+                //    按住到长按时长才拖（= "长按它直接拖动"）。长按之前手指一动就放弃，
+                //    把这一串留给平移。
+                //  * 一旦认领：down 和之后的每个 move / up 都消费掉，平移收不到，
+                //    所以拖点期间图像不会跟着乱跑。
+                .then(
+                    if (!interactive) Modifier else Modifier
+                        .pointerInput(state.activeTool, state.isMoveTool, state.tappedObjectId) {
+                            if (!state.isMoveTool) return@pointerInput
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val id = state.draggablePointAt(down.position.x, down.position.y)
+                                    ?: return@awaitEachGesture
+                                if (state.tappedObjectId != id) {
+                                    // `withTimeoutOrNull` 返回 null = 熬满了长按时长（成立）；
+                                    // 返回 true = 中途抬手或移动了（放弃，交给点选/平移）。
+                                    val abandoned = withTimeoutOrNull(
+                                        viewConfiguration.longPressTimeoutMillis
+                                    ) {
+                                        var gone = false
+                                        while (!gone) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes
+                                                .firstOrNull { it.id == down.id }
+                                            if (change == null) {
+                                                gone = true
+                                                break
+                                            }
+                                            if (change.changedToUpIgnoreConsumed()) {
+                                                gone = true
+                                                break
+                                            }
+                                            val dx = change.position.x - down.position.x
+                                            val dy = change.position.y - down.position.y
+                                            val slop = viewConfiguration.touchSlop
+                                            if (dx * dx + dy * dy > slop * slop) gone = true
+                                        }
+                                        true
+                                    }
+                                    if (abandoned != null) return@awaitEachGesture
+                                }
+                                state.beginPointDrag(id, down.position.x, down.position.y)
+                                down.consume()
+                                try {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes
+                                            .firstOrNull { it.id == down.id } ?: break
+                                        state.movePointDrag(
+                                            change.position.x,
+                                            change.position.y
+                                        )
+                                        change.consume()
+                                        if (change.changedToUpIgnoreConsumed()) break
+                                    }
+                                } finally {
+                                    state.endPointDrag()
+                                }
+                            }
+                        }
                 )
                 // ================= 手势 2：点一下（选中曲线 / 喂给工具状态机）=================
                 //
@@ -1962,7 +3064,12 @@ private fun GraphRoute(
                 .then(
                     if (!interactive) Modifier else Modifier
                         .onRotaryScrollEvent { event ->
-                            state.zoomByFactor(rotaryFactor(event.verticalScrollPixels))
+                            // 3.42：这一支绕过 Activity，必须在这里补上灵敏度。
+                            state.zoomByFactor(
+                                rotaryFactor(
+                                    applyCrownSpeed(event.verticalScrollPixels, state.settings.crownSpeed)
+                                )
+                            )
                             true
                         }
                         .focusRequester(focusRequester)
@@ -1970,7 +3077,9 @@ private fun GraphRoute(
                         // 表冠路径 3：被映射成方向键 / 音量键的机型
                         .onKeyEvent { event -> handleViewKey(event, state) }
                 ),
-            gridColor = scheme.outlineVariant.copy(alpha = 0.45f),
+            // 网格：不再是"亮色 × 45%"（那个算法只对黑底成立）。
+            // 两套模式需要的淡法方向相反，所以合成结果按角色存（`AppRoleColors.gridLine`）。
+            gridColor = scheme.gridLine,
             axisColor = scheme.onSurfaceVariant,
             labelColor = scheme.onSurfaceVariant,
             strokeGrid = metrics.strokeGrid,
@@ -2388,27 +3497,111 @@ private fun GraphRoute(
         // 区域滑一下，事件会漏到这一层来、把路由改回函数列表 ——
         // 用户要的是"关掉浮窗回到原来那一屏"，路由不该被底图那种画面改掉。
         if (interactive) {
+            // 控制器在函数顶部已经读过一次（见 `drawerController`），这里只是取个短名字。
+            val drawerCtl = drawerController
+            /**
+             * **整屏高度（px）** —— 抽屉位移的分母。
+             *
+             * ⚠️ 这里原来用的是 `size.height`，那是**这条热区自己的高度**
+             * （`SWIPE_UP_ZONE_H` = 17% 屏高）。拿它当分母，等于把手指位移
+             * 放大了 1/0.17 ≈ **5.9 倍**：手指刚从底部挪出十几像素，
+             * 算出来的进度就已经是 1 —— 用户看到的就是"一上滑，抽屉直接到顶"。
+             *
+             * 改成整屏高度之后，手指走多少像素、抽屉就走多少像素。
+             */
+            val screenHPx = with(density) { geometry.sy(1f).toPx() }
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(metrics.sizeDp * SWIPE_UP_ZONE_H)
                     .pointerInput(Unit) {
-                        var accum = 0f
-                        detectVerticalDragGestures(
-                            onDragStart = { accum = 0f },
-                            onDragEnd = { accum = 0f },
-                            onDragCancel = { accum = 0f },
-                            onVerticalDrag = { _, dragAmount ->
-                                accum = if (dragAmount < 0f) accum + dragAmount else 0f
-                                if (accum < -swipeUpPx) {
-                                    accum = 0f
-                                    // 去向由状态层决定（#9）：刚从「功能界面」过来就回功能界面，
-                                    // 否则回函数列表（以前的行为）。见 GraphState.leaveGraphBySwipeUp。
-                                    state.route = state.leaveGraphBySwipeUp()
+                        // ---- 跟手：拖动过程中**实时**把抽屉推上去 ----
+                        //
+                        // ⚠️ 用的是项目自己的 [awaitOneWayDrag]，不是
+                        // `detectVerticalDragGestures`，而且 `abandonIfCrossAxisWins = true`。
+                        //
+                        // 原因（用户报的"横滑到一半手指往上一抬，直接瞬移到另一屏"）：
+                        // 库函数只认"纵向位移越过容差"，不管你横向已经走了多远 ——
+                        // 斜着滑的时候纵向先到阈值，它就把整串事件认领了，
+                        // 于是抽屉被瞬间写到一个极端值，看起来就是无动画的跳转。
+                        // [awaitOneWayDrag] 的交叉轴判据会在"横向明显更大"时**永久放弃**，
+                        // 这一串从此与抽屉无关，横滑照常。
+                        awaitEachGesture {
+                            // ---- 揭示动画期间锁住抽屉（用户反馈 3）----
+                            //
+                            // 动画还没播完时，底部提示条这一串事件**整串吞掉**：
+                            // 不取背景（此刻取到的还是半条曲线）、不驱动抽屉、松手也不吸附。
+                            // 播完由 `onRevealFinished` 自动解锁，正常拖动完全不受影响。
+                            //
+                            // 这里必须自己接住 down：`awaitOneWayDrag` 内部也是先
+                            // `awaitFirstDown`，锁定时提前 return 会把它那一拍让掉。
+                            if (revealRunning) {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    event.changes.forEach { it.consume() }
+                                    if (event.changes.none { it.pressed }) break
                                 }
+                                return@awaitEachGesture
                             }
-                        )
+
+                            // ---- 全应用唯一的毛玻璃重录点（3.27）----
+                            //
+                            // 用户原话：
+                            // > "把任何方式的重新绘制都删了，只留在函数界面手碰到
+                            // >  下面的提示条的时候重新绘制一帧。"
+                            //
+                            // 所以就在**手指碰到这条提示条（按下）的那一刻**重画一帧，
+                            // 不等手指移动、也不等认领手势。此刻抽屉还贴着底、
+                            // 毛玻璃层被裁成空，重录不可见；这一次拖动全程
+                            // 再也不会重画。
+                            //
+                            // ⚠️ 一次手势只请求一次：`awaitEachGesture` 每串事件
+                            // 进一次，若这里不设闩，多指按下会连发几次。
+                            //
+                            // ---- ⚠️ 2026-10-27：取图挪到松手，不在这里做 ----
+                            //
+                            // 用户原话："滑动函数图像界面的提示条会卡，你做成之前那种样子。"
+                            // 取图（`GraphicsLayer.toImageBitmap()` 的 GPU 回读）会在
+                            // 起手那一拍压出十几毫秒，正好卡在拖动最敏感的时刻。
+                            // 现在改由 `DrawerController.release()` 在"松手且方向是打开"
+                            // 时发起（见 `DrawerDeck`），拖动全程零计算。
+                            //
+                            // 按下这一刻只做一件事：暂停滑动条播放（松手继续）—— 用户要求
+                            // "在函数图像界面按到提示条就暂停播放，松手继续"。
+                            // 必须在这里置、在这次手势**结束时**清（见下面的 finally）：
+                            // 轻点一下（没被认领成拖动）同样算"按到了提示条"，
+                            // 而 `onEnd` 只在认领过时才回调，放在那里会永久卡住播放。
+                            drawerCtl?.setHintBarPressed(true)
+                            try {
+                                awaitOneWayDrag(
+                                    axis = DragAxis.VERTICAL,
+                                    positive = false,                 // 只认**向上**
+                                    abandonIfCrossAxisWins = true,
+                                    onDrag = { total ->
+                                        if (drawerCtl != null) {
+                                            // 拉出 40% 屏高就算"拉满" —— 要求拉满整屏才动，
+                                            // 在 233dp 的表上手指根本走不完那段距离。
+                                            drawerCtl.dragTo(
+                                                -total / (screenHPx * DRAWER_PULL_FRACTION)
+                                            )
+                                        }
+                                    },
+                                    onEnd = { total ->
+                                        if (drawerCtl != null) {
+                                            drawerCtl.release()
+                                        } else if (total < -swipeUpPx) {
+                                            // 没接抽屉时退回老行为（单独预览这一屏）
+                                            state.route = state.leaveGraphBySwipeUp()
+                                        }
+                                    }
+                                )
+                            } finally {
+                                drawerCtl?.setHintBarPressed(false)
+                            }
+                        }
                     },
                 contentAlignment = Alignment.BottomCenter
             ) {
@@ -2860,28 +4053,6 @@ private const val CURVE_CARD_MAX_H = 0.34f
 private const val CARD_IN_MS = 190
 
 /**
- * 「保存函数文件」**浮窗**底下那张模糊函数图像的模糊半径（占屏宽的比例）。
- *
- * 用户原话是"以函数图像为背景的，背景要有**高斯模糊**"，而且明确要"看得出来"。
- * `Modifier.blur` 要的是**半径**（一个长度），不是百分比，所以按屏宽折算：
- *
- *     233dp × 0.065 ≈ **15.1dp**（466px 屏上 ≈ 30px）
- *
- * 为什么取屏宽 5%~8% 这一档（12~19dp）：
- *   * 再小（比如上一轮那个 3% ≈ 7dp）：只有曲线边缘轻微化开，
- *     网格还是清清楚楚的 —— "有高斯模糊"这件事**看不出来**，等于没做；
- *   * 再大（屏宽 15% 以上）：网格和曲线糊成一整块色斑，
- *     用户就认不出"底下是函数图像界面"了 —— 而"知道自己还站在图像界面上"
- *     正是他要在浮窗下面垫这张图的原因（上一轮的注释里也是这个意思）；
- *   * 15.1dp 这一档：网格线明显化开、曲线变成一条柔和的光带，
- *     但整体形状和配色仍然认得出是那张图 —— 也就是"看得出模糊、又认得出是图"。
- *
- * **这是一个纯视觉参数：想要更糊/更清楚只改这一个数**（`Modifier.blur` 那句只用它）。
- * 用 `BlurredEdgeTreatment.Unbounded`：底图满屏，边缘不会被切一刀。
- */
-private const val SAVE_BACKDROP_BLUR_FRACTION = 0.065f
-
-/**
  * 低版本（`Modifier.blur` 是空操作的 Android 12 以下）兜底那层半透明黑遮罩的浓度。
  *
  * 为什么是 **0.45** 而不是别处降级用的 0.7 上下：这一层**上面还压着浮窗自己那张
@@ -2949,11 +4120,51 @@ private const val SLIDER_PLAY_TICK_MS = 90L
 /**
  * 表冠一格大约几像素，转成缩放倍率。
  *
- * 钳制在 ±0.25 是有必要的：不同 ROM 一次事件给的像素量差很多，
- * 不钳制会出现"转一格直接放大十倍"。
+ * ## 为什么不再用硬钳制（2026-10-27）
+ *
+ * 用户报："表冠灵敏度没有实装。"
+ *
+ * 旧写法是 `exp((scrollPixels * 0.0016).coerceIn(-0.25, 0.25))`。
+ * 灵敏度 `crownSpeed` 确实在 `MainActivity.scrollAmount()` 里乘过
+ * （`raw * crownSpeed`），但这个 **±0.25 的硬夹子**把结果压平了：
+ * 0.25 / 0.0016 ≈ 156 像素，只要一次事件超过这个量（一拨就到了），
+ * 1× 和 10× 出来的都是同一个 1.28 倍 —— 用户当然感觉"拨了没区别"。
+ *
+ * 现在改成**软饱和**（[kotlin.math.tanh]）：
+ *
+ * ```
+ * exp(tanh(x / LIMIT) * LIMIT)
+ * ```
+ *
+ * 小步长时 `tanh(x) ≈ x`，灵敏度**一一对应地**乘进去（拨一格与拨十格差别明显）；
+ * 只有 ROM 一次给出巨大像素量时才渐近到 [CROWN_STEP_LIMIT]，
+ * 依旧不会出现"转一格放大十倍"。
  */
-private fun rotaryFactor(scrollPixels: Float): Double =
-    exp((scrollPixels * 0.0016f).toDouble().coerceIn(-0.25, 0.25))
+private const val CROWN_STEP_LIMIT = 0.35
+
+private fun rotaryFactor(scrollPixels: Float): Double {
+    val x = (scrollPixels * 0.0016f).toDouble()
+    if (!x.isFinite()) return 1.0
+    val soft = kotlin.math.tanh(x / CROWN_STEP_LIMIT) * CROWN_STEP_LIMIT
+    return exp(soft)
+}
+
+/**
+ * 给**未经 Activity 缩放**的原始表冠量套上灵敏度（3.42）。
+ *
+ * 只用于 Compose 的 `onRotaryScrollEvent` 分支：它的事件直接来自 `View`，
+ * 不经过 `MainActivity.dispatchGenericMotionEvent`，所以那里的 `crownSpeed`
+ * 对它不起作用 —— 这就是用户报"表冠灵敏度调整也没有实装"的原因
+ * （某些机型走这一支，滑条怎么拨都没区别）。
+ *
+ * @param rawPixels 事件自带的 `verticalScrollPixels`
+ * @param speed 0.1 ~ 10.0，来自设置页
+ */
+internal fun applyCrownSpeed(rawPixels: Float, speed: Float): Float {
+    val s = speed.coerceIn(0.1f, 10f)
+    val scaled = rawPixels * s
+    return if (scaled.isFinite()) scaled else rawPixels
+}
 
 private fun handleViewKey(
     event: androidx.compose.ui.input.key.KeyEvent,

@@ -71,7 +71,9 @@ data class Viewport(
         if (factor <= 0.0 || !factor.isFinite()) return this
         val wx = toWorldX(focusPx.toDouble())
         val wy = toWorldY(focusPy.toDouble())
-        val next = (unitsPerPixel / factor).coerceIn(MIN_UNITS_PER_PIXEL, MAX_UNITS_PER_PIXEL)
+        // 放大的上限跟着计算精度走：3 位最多到 1e-3、8 位到 1e-8、16 位到 1e-16。
+        val next = (unitsPerPixel / factor)
+            .coerceIn(Calc.precision.minUnitsPerPixel, MAX_UNITS_PER_PIXEL)
         if (next == unitsPerPixel) return this
         return copy(
             centerX = wx - (focusPx - widthPx / 2.0) * next,
@@ -133,6 +135,11 @@ data class Viewport(
         }
 
     companion object {
+        /**
+         * 理论上的最小缩放（保留给调用方做"值是否合法"的粗判）。
+         *
+         * 真正生效的**放大上限**随计算精度变，一律读 [Calc.precision.minUnitsPerPixel]。
+         */
         const val MIN_UNITS_PER_PIXEL = 1e-9
         const val MAX_UNITS_PER_PIXEL = 1e9
 
@@ -145,7 +152,7 @@ data class Viewport(
                 heightPx = height,
                 centerX = (minX + maxX) / 2.0,
                 centerY = 0.0,
-                unitsPerPixel = upp.coerceIn(MIN_UNITS_PER_PIXEL, MAX_UNITS_PER_PIXEL)
+                unitsPerPixel = upp.coerceIn(Calc.precision.minUnitsPerPixel, MAX_UNITS_PER_PIXEL)
             )
         }
     }

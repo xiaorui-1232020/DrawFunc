@@ -5,6 +5,7 @@ package com.functiondrawer.watch.ui
 
 import android.content.Context
 import android.net.Uri
+import com.functiondrawer.watch.engine.CalcPrecision
 import com.functiondrawer.watch.engine.LineStyle
 import com.functiondrawer.watch.engine.PlotFunction
 import com.functiondrawer.watch.engine.PlotMode
@@ -107,7 +108,18 @@ object Store {
             degrees = settings.angleUnit == AngleUnit.DEG,
             blockSystemGestures = settings.blockSystemGestures,
             showZoomBar = settings.showZoomBar,
-            confirmReturnToMove = settings.confirmReturnToMove
+            confirmReturnToMove = settings.confirmReturnToMove,
+            dayMode = settings.dayMode,
+            crownMode = settings.crownMode.ordinal,
+            crownSpeedTenths = (settings.crownSpeed * 10f).toInt().coerceIn(1, 100),
+            themeStyle = settings.themeStyle.ordinal,
+            blurBackdrop = settings.blurBackdrop,
+            // 第 17 段：模糊程度（0~100 整数）。存整数是为了存档不出现浮点尾巴。
+            blurStrengthPercent = (settings.blurStrength * 100f).toInt().coerceIn(0, 100),
+            // 第 18 段：计算精度序号（0=3 位 / 1=8 位 / 2=16 位）
+            precision = settings.precision.ordinal,
+            // 第 19 段：按钮下阴影强度（0~100 整数）
+            keyShadowPercent = (settings.keyShadowStrength * 100f).toInt().coerceIn(0, 100)
         ).encode()
         // 滑动条：一行一条，字段 id|参数|下界|上界|步长|当前值|颜色|可见
         val slidersText = sliders.joinToString("\n") { s ->
@@ -134,6 +146,39 @@ object Store {
                 .putString(KEY_SLIDERS, slidersText)
                 .apply()
         }
+    }
+
+    /**
+     * 表冠偏好：`(模式, 灵敏度)`。给 `MainActivity` 用。
+     *
+     * 为什么单独开一个口子，而不是让 Activity 去读 [Saved]：
+     * 表冠事件在**每一帧**都可能来，而 [load] 要把整份函数列表、滑动条、视野都解析一遍；
+     * Activity 只需要其中两个数。这里只解设置行，且不走 `SettingsFields.encode` 的反向
+     * 全量映射 —— 缺段就用默认值，和 [load] 里的规则逐项一致（见那边的注释）。
+     *
+     * 容错：从来没存过设置（全新安装）→ OPPO + 1.0。
+     */
+    fun loadCrownPrefs(context: Context): Pair<CrownMode, Float> {
+        val text = runCatching {
+            context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_SETTINGS, null)
+        }.getOrNull()
+        val f = SettingsFields.decode(text, CoordinateSystem.entries.size)
+        val mode = CrownMode.entries.getOrNull(f.crownMode) ?: CrownMode.OPPO
+        val speed = f.crownSpeedTenths.coerceIn(1, 100) / 10f
+        return mode to speed
+    }
+
+    /**
+     * 只读「白天模式」这一位。
+     *
+     * 预编译界面在**第一帧**就要用对底色（用户可能在白天模式下用这个 App），
+     * 但那时整份存档还没解析完 —— 单独读这一位，代价和 [loadCrownPrefs] 一样小。
+     */
+    fun loadDayMode(context: Context): Boolean {
+        val text = runCatching {
+            context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_SETTINGS, null)
+        }.getOrNull()
+        return SettingsFields.decode(text, CoordinateSystem.entries.size).dayMode
     }
 
     fun load(context: Context): Saved? {
@@ -196,8 +241,9 @@ object Store {
                 upp = parts[2].toDoubleOrNull() ?: 0.0
             }
         }
-        // 缩放值必须合法，否则宁可用默认视野
-        if (!upp.isFinite() || upp <= Viewport.MIN_UNITS_PER_PIXEL) upp = 0.0
+        // 缩放值必须合法，否则宁可用默认视野。
+        // 真正的下界要等设置（精度）读出来才知道，下面读完后会再按精度夹一次。
+        if (!upp.isFinite() || upp <= 0.0) upp = 0.0
 
         // 设置：字段顺序与"缺段补默认"的规矩全在纯 Kotlin 那一份里
         // （`PlotMetrics.SettingsFields`，离线单测钉着）。
@@ -219,8 +265,29 @@ object Store {
                 angleUnit = if (f.degrees) AngleUnit.DEG else AngleUnit.RAD,
                 blockSystemGestures = f.blockSystemGestures,
                 showZoomBar = f.showZoomBar,
-                confirmReturnToMove = f.confirmReturnToMove
+                confirmReturnToMove = f.confirmReturnToMove,
+                // 第 11 段：白天模式（true = 白底那套新配色）。老存档缺这段 → false（夜间黑底）。
+                // 旧版这一段叫 nightMode 且 true 也是白底，所以**存值语义完全一致**，无需迁移。
+                dayMode = f.dayMode,
+                // 第 12/13 段：表冠模式与灵敏度。老存档缺 → OPPO + 1.0（改动前的手感）。
+                crownMode = CrownMode.entries.getOrNull(f.crownMode) ?: CrownMode.OPPO,
+                crownSpeed = f.crownSpeedTenths.coerceIn(1, 100) / 10f,
+                themeStyle = ThemeStyle.entries.getOrNull(f.themeStyle) ?: ThemeStyle.MATERIAL,
+                // 第 15 段：模糊背景开关。老存档缺 → true（上一版一直在糊，升级上来零感知）。
+                blurBackdrop = f.blurBackdrop,
+                // 第 17 段：模糊程度。缺 → 100（上一版没有这一项，糊度不变）。
+                blurStrength = f.blurStrengthPercent.coerceIn(0, 100) / 100f,
+                // 第 18 段：计算精度。老存档缺 → 8 位；序号越界退回 8 位。
+                precision = CalcPrecision.entries.getOrNull(f.precision) ?: CalcPrecision.P8,
+                // 第 19 段：按钮下阴影强度。缺 → 10%（用户点名的默认值）。
+                keyShadowStrength = f.keyShadowPercent.coerceIn(0, 100) / 100f
             )
+        }
+
+        // 缩放上限跟着**存档里读出来的精度**走：老存档的值比新上限还小（放得太大）时
+        // 直接按新上限纠正，而不是把整个视野丢掉。
+        if (upp > 0.0) {
+            upp = upp.coerceIn(settings.precision.minUnitsPerPixel, Viewport.MAX_UNITS_PER_PIXEL)
         }
 
         return Saved(

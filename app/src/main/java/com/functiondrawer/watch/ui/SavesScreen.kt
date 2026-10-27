@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.materialIcon
 import androidx.compose.material.icons.materialPath
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -70,7 +71,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
@@ -358,7 +358,7 @@ fun SavesScreen(
     val rowHeight = metrics.sizeDp * ROW_H
     val listTopPx = with(density) { (metrics.sizeDp * LIST_TOP).toPx() }
     // 注意：`swipeDownPx`（顶部下滑的判定阈值）随那条手势一起删掉了，见下面"下滑返回已删"。
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
     val listState = rememberLazyListState()
 
     // 当前列表。删完文件要重列一次（`refresh()`）。
@@ -427,6 +427,36 @@ fun SavesScreen(
      * 播完才真的重读目录；剩下的行往上合拢那一段由 `Modifier.animateItem` 的位移接管。
      */
     var dying by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // 教程"上一步"要撤销这一屏上的选择 / 删除：把两个复原入口登记给状态机。
+    // 只在这一屏活着的时候登记，离开文件列表就摘掉（那时撤销步骤也不会落在这里）。
+    DisposableEffect(Unit) {
+        Tutorial.onRestoreSavesSelection = { restore ->
+            refresh()
+            when (restore) {
+                // 什么都没选中（普通模式）
+                Tutorial.SavesRestore.Clear -> {
+                    multiSelect = false
+                    selected = emptySet()
+                }
+                // 重新选中刚存的 test（第 28 步的效果）
+                Tutorial.SavesRestore.SelectTest -> {
+                    multiSelect = false
+                    val test = entries.firstOrNull { it.baseName == "test" }
+                    selected = if (test != null) setOf(test.file.absolutePath) else emptySet()
+                }
+            }
+        }
+        Tutorial.onRestoreDeletedFile = {
+            // 名义删除的文件还回列表（撤销第 31 步 / 中途退出）
+            FunctionFileStore.unstash()
+            refresh()
+        }
+        onDispose {
+            Tutorial.onRestoreSavesSelection = null
+            Tutorial.onRestoreDeletedFile = null
+        }
+    }
     val scope = rememberCoroutineScope()
 
     // 这里原来有一条"撤销条 2 秒后自己消失"的计时（`LaunchedEffect(deleted)`）。
@@ -464,9 +494,18 @@ fun SavesScreen(
         // 这里原来先 `FunctionFileStore.read` 把内容读出来留着撤销用 —— 撤销没了，
         // 这次读盘也一起去掉（少一遍同步 IO）。
         var removed = 0
-        for (e in targets) {
-            if (FunctionFileStore.delete(e.file)) removed++
+        if (Tutorial.active) {
+            // 教程期间**不真删**：只从列表里拿掉（盘上的文件留着，退出教程还要还回来，
+            // 走完全程才由 FunctionFileStore.dropStash() 真正删掉）
+            FunctionFileStore.stash(targets.map { it.file })
+            removed = targets.size
+        } else {
+            for (e in targets) {
+                if (FunctionFileStore.delete(e.file)) removed++
+            }
         }
+        // 教程第 31 步：垃圾桶线圈转满一圈、文件从列表里消失 = 这一步完成
+        Tutorial.report("saves_deleted")
         exitMultiSelect()
         // ---- 删除的过渡（用户要求"删除要有过渡"）----
         // 顺序很讲究：托盘提示**立刻**出来（用户马上知道成功了），
@@ -503,7 +542,14 @@ fun SavesScreen(
             // 见 `watchColors()` / `WatchPalette.background`）而不是自己写死一个黑：
             // 和外壳 `GraphScreen` 最外层那一层背景读的是**同一个值**，
             // 将来换主题时两处一起变，不会出现"列表比外壳黑得不一样"。
-            .background(MaterialTheme.colors.background)
+            .background(
+                // 回到 3.45 的写法：有背景可透 → 62% 底色；否则实色。
+                if (LocalGlassTheme.current) {
+                    MaterialTheme.colors.background.copy(alpha = GLASS_PAGE_MASK_ALPHA)
+                } else {
+                    MaterialTheme.colors.background
+                }
+            )
     ) {
 
         // ---- 最底层：点空白 = 取消选中（"失去焦点"的第 ② 条）----
@@ -587,7 +633,8 @@ fun SavesScreen(
                         icon = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回",
                         metrics = metrics,
-                        onClick = onBack
+                        onClick = onBack,
+                        modifier = Modifier.tutorialAnchor(TutorialAnchors.SAVES_BACK)
                     )
                 }
                 AnimatedVisibility(visible = multiSelect, enter = keyEnter, exit = keyExit) {
@@ -674,7 +721,9 @@ fun SavesScreen(
                             } else {
                                 KeyPalette.text.copy(alpha = KeyPalette.DANGER_DIM_ALPHA)
                             },
-                            onClick = {}
+                            onClick = {},
+                            // 教程第 31 步要圈住这颗垃圾桶
+                            modifier = Modifier.tutorialAnchor(TutorialAnchors.SAVES_DELETE)
                         )
                     }
                 }
@@ -735,7 +784,10 @@ fun SavesScreen(
                                     selected = if (path in selected) selected - path else selected + path
                                 } else {
                                     // 普通：单选；再点同一个 = 取消选中（"失去焦点"第 ① 条）
-                                    selected = if (selected == setOf(path)) emptySet() else setOf(path)
+                                    val wasSelected = selected == setOf(path)
+                                    selected = if (wasSelected) emptySet() else setOf(path)
+                                    // 教程第 28/29 步：选中 / 再点一下取消
+                                    Tutorial.report(if (wasSelected) "saves_deselected" else "saves_selected")
                                 }
                             }
                         },
@@ -748,6 +800,8 @@ fun SavesScreen(
                                     // 普通里长按 = 进多选，并且**这个文件被选中**
                                     multiSelect = true
                                     selected = setOf(path)
+                                    // 教程第 30 步：长按 test 进多选
+                                    Tutorial.report("saves_multi")
                                 }
                             }
                         },
@@ -759,6 +813,12 @@ fun SavesScreen(
                                 renameError = null
                                 renameFor = entry
                             }
+                        },
+                        // 教程第 28~31 步圈的是刚存的 test 那一行
+                        anchorId = if (entry.baseName == "test") {
+                            TutorialAnchors.SAVES_ROW_TEST
+                        } else {
+                            TutorialAnchors.savesRow(entry.baseName)
                         }
                     )
                 }
@@ -1040,7 +1100,9 @@ private fun FileRow(
     widthFraction: Float,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
-    onRename: () -> Unit
+    onRename: () -> Unit,
+    /** 教程锚点（每行都登记；教程第 28~31 步只认 test 那一行）。 */
+    anchorId: String? = null
 ) {
     val press = rememberPressFeedback(scaleAmount = ROW_PRESS_SCALE, glowAmount = 0f)
     // 上一次点击的时间戳（0 = 没有待配对的点击）。用 longArray 而不是 mutableStateOf：
@@ -1119,6 +1181,7 @@ private fun FileRow(
             // 观察者：只记"手指有没有离开过这一行"，**一个字节都不消费**
             //（所以单击 / 双击重命名 / 多选切换全都不受影响）
             .pressInsideGuard(longPressGuard)
+            .tutorialAnchor(anchorId)
     ) {
         Row(
             modifier = Modifier

@@ -41,8 +41,8 @@ android {
         // 历史：1.0 / 1 → **1.0fix / 2**（用户 2026-10-05 点名："把安装包版本号升到 1.0fix，
         // versioncode 变成 2"）→ **1.1 / 3**（用户 2026-10-05 点名："签名完之后再安装、
         // 升版本号和 versioncode"，选项里选的是 `1.1 / 3`）。
-        versionCode = 3
-        versionName = "1.1"
+        versionCode = 121
+        versionName = "1.2.25"
     }
 
     // release 签名：密钥路径与口令放在项目根目录的 keystore.properties 里
@@ -146,6 +146,23 @@ dependencies {
     // 不用 material3：本机缓存里没有该构件，而且 Maven Central 不可达。
     implementation(libs.androidx.material)
     implementation(libs.androidx.material.icons.core)
+    // 毛玻璃统一用 BlurView（Dimezis），而不是 Compose 的 `Modifier.blur`。
+    //
+    // 原因：`Modifier.blur` 背后是 RenderEffect，**API 31（Android 12）起才有**，
+    // 用户的 Android 11 手表上它是空操作。BlurView 2.x 在 12 以下会退到
+    // RenderScript 的 ScriptIntrinsicBlur（API 17 起就有），所以全版本都能糊。
+    //
+    // 版本钉在 2.0.6，不用 3.x：
+    //   * 3.x 的 `BlurTarget` 用 RenderNode 抓内容，`canUseHardwareRendering`
+    //     在 SDK < 31 时是 false，那条路等于是给 12+ 写的；2.x 的
+    //     `setupWith(ViewGroup)` 是"把根 View 画进一张 Bitmap 再糊"，
+    //     走的是最普通的 draw，不挑 API。
+    //   * 2.x 支持 `setOverlayColor/setBlurRadius/setBlurEnabled`，
+    //     正好够本项目用（不需要 Compose 侧的 BlurTarget）。
+    //
+    // 抓帧对象是 `LocalView.current`（即 ComposeView 本身），也就是**整个界面**：
+    // 函数图、抽屉都画在里面，BlurView 抓到的是"当前屏幕上真实的样子"。
+    implementation(libs.blurview)
     implementation(libs.androidx.ui.tooling.preview)
     debugImplementation(libs.androidx.ui.tooling)
 

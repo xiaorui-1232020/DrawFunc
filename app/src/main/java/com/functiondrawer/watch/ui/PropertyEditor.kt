@@ -1,5 +1,5 @@
 // 手表 UI 大量用到实验性接口，文件级统一 OptIn：
-//   * ExperimentalComposeUiApi —— LocalConfiguration.isScreenRound（圆屏判断）；
+//   * ExperimentalComposeUiApi —— 部分实验性 Compose UI 接口（圆屏判断已改走 isRoundScreen）；
 //   * ExperimentalFoundationApi —— 数字小键盘 ⌫ 的 combinedClickable（长按清空）。
 @file:OptIn(
     androidx.compose.ui.ExperimentalComposeUiApi::class,
@@ -63,7 +63,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
@@ -332,7 +331,7 @@ fun FunctionPropertyEditorScreen(
     // 现在位置按真实屏高（`geometry.sy`）、宽度非圆屏铺满（`bandWidth`）。
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
-        val isRound = LocalConfiguration.current.isScreenRound
+        val isRound = isRoundScreen()
 
         PropertyEditorShell(
             metrics = metrics,
@@ -572,7 +571,7 @@ fun SliderPropertyEditorScreen(
     // （理由见 FunctionPropertyEditorScreen 里那段说明）。
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
-        val isRound = LocalConfiguration.current.isScreenRound
+        val isRound = isRoundScreen()
 
         PropertyEditorShell(
             metrics = metrics,
@@ -852,7 +851,7 @@ fun ObjectPropertyEditorScreen(
     // 和另外两个属性屏同一套：自己量真实尺寸（位置按真实屏高、宽度非圆屏铺满）。
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
-        val isRound = LocalConfiguration.current.isScreenRound
+        val isRound = isRoundScreen()
 
         PropertyEditorShell(
             metrics = metrics,
@@ -1075,7 +1074,7 @@ fun ObjectDetailsScreen(
     // 这一屏是只读的，所以只有"宽度 + 两个落点"要换算，没有任何输入路径受影响。
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
-        val isRound = LocalConfiguration.current.isScreenRound
+        val isRound = isRoundScreen()
 
         /** 数据卡顶：名称行（`ROW_TOP ~ ROW_TOP + ROW_H`）下面一条缝。和另外两屏同一个落点。 */
         val dataTop = ROW_TOP + ROW_H + ROW_GAP
@@ -1495,6 +1494,9 @@ private fun PropertyEditorShell(
                     cursor = nameCursor,
                     hint = nameHint,
                     metrics = metrics,
+                    // 这是**函数名**，不是公式：不做数学排版（`a` 不该变斜体、
+                    // `f` 也不该被当成变量），也不支持拖动定位 —— 就那么几个字母。
+                    math = false,
                     // 编辑态是"这个框正在被输入"（强调色 + 亮光标），列表态是普通深灰
                     focused = nameEditing,
                     onTap = onNameTap,
@@ -1809,7 +1811,7 @@ private fun WidthTrack(
                     .height(trackH)
                     .align(Alignment.CenterStart)
                     .clip(PillShape)
-                    .background(Color.White.copy(alpha = 0.16f))
+                    .background(KeyPalette.track)
             )
             // 已选中的部分（强调色）
             Box(

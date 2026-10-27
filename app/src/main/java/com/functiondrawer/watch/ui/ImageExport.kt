@@ -6,7 +6,10 @@ package com.functiondrawer.watch.ui
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.ImageBitmap
@@ -49,12 +52,42 @@ class GraphCapture internal constructor(private val layer: GraphicsLayer) {
      *
      * `drawWithContent` 把这一层的内容同时画到屏幕和图层里 ——
      * 也就是说它**不影响显示**，只是顺手录一份。
+     *
+     * ## ⚠️ 3.41：`layer.record` 把「读到的状态」也一起缓存了
+     *
+     * `record` 记录的是**内容本身在录制那一刻的求值结果**。所以如果被录的那一层
+     * 之后没重绘（比如用户在设置页里拨了滑条，底下的画布纹丝不动），
+     * 图层里就仍是旧画面 —— 取出来的位图自然也是旧的。
+     *
+     * 这就是"设置里改模糊程度不重绘"最后剩下的那一环：光让 `BackdropImage` 重新请求
+     * **没用**，因为源头（这一层）根本没刷新。修法见 [version]：每次要取图前
+     * 把版本号赶一格，让这一层的 `drawWithContent` 在下一帧必然重跑一遍。
      */
     val modifier: Modifier
-        get() = Modifier.drawWithContent {
-            layer.record { this@drawWithContent.drawContent() }
-            drawLayer(layer)
-        }
+        get() = Modifier
+            // 读一下版本号：它变 → 这个 draw 节点变脏 → 下一帧重绘 → 图层刷新。
+            .drawWithContent {
+                if (version >= Int.MIN_VALUE) {
+                    layer.record { this@drawWithContent.drawContent() }
+                    drawLayer(layer)
+                }
+            }
+
+    /**
+     * 录制版本号（3.41）。
+     *
+     * `drawWithContent` 的 lambda 在**绘制阶段**执行，里面读到的任何 state
+     * 都会被 Compose 记为"这个绘制节点的依赖"。值一变，节点失效、下一帧重绘。
+     *
+     * 只增不减，永远不会回到同一个值 —— 这是它能当"手动失效开关"用的前提。
+     */
+    var version by mutableStateOf(0)
+        private set
+
+    /** 让这一层下一帧重绘一次（从而把最新内容录进 [layer]）。 */
+    fun invalidate() {
+        version++
+    }
 
     /** 取当前内容的位图（挂起：图层是异步资源）。 */
     suspend fun toImageBitmap(): ImageBitmap = layer.toImageBitmap()

@@ -49,6 +49,7 @@ import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -64,7 +65,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -613,7 +613,7 @@ fun FunctionListScreen(
 ) {
     val scheme = MaterialTheme.colors
     val density = LocalDensity.current
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
     val listState = rememberLazyListState()
 
     // ---- 真实可用尺寸（不是短边）----
@@ -624,6 +624,16 @@ fun FunctionListScreen(
     // 详见 [ScreenGeometry] 上面那段说明。
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
+
+        // ---- 抽屉（本轮新增）：顶部下滑 = 把抽屉收回去，**跟手** ----
+        //
+        // 用户要的是"抽屉拉回"：手指往下走多少，抽屉就落多少，松手再吸附。
+        // 所以这里在 onVerticalDrag 里把位移换算成抽屉进度（1 = 完全展开），
+        // 而不是等累计到阈值再切路由。
+        //
+        // `LocalDrawerController` 为 null 时（这一屏被单独使用）退回老行为。
+        val drawerCtl = LocalDrawerController.current
+        val screenHPx = with(density) { geometry.sy(1f).toPx() }
 
         val rowHeight = metrics.sizeDp * ROW_H
         val listTopPx = with(density) { geometry.sy(LIST_TOP).toPx() }
@@ -763,6 +773,18 @@ fun FunctionListScreen(
                 // 完整机制（含每步的字节码依据）写在 `DragGestures.kt` 文件头。
                 // ==================================================================
                 .pointerInput(toolbarStrip) {
+                    // ---- 在抽屉里，横向手势**交给 Pager** ----
+                    //
+                    // 这条手势是"左边缘往右滑 → 进功能界面"。它一旦认领，
+                    // 就会在之后的每一帧 `consume()` 这一串事件 —— 而 Pager 的翻页
+                    // 恰恰要读同一串位移。两者抢同一批事件的结果是：
+                    // **翻页先卡住、松手后才被 `state.route` 拽过去**，
+                    // 也就是用户说的"不像手机桌面那样流畅"。
+                    //
+                    // 现在：只要能拿到抽屉控制器（= 这一屏确实在 Pager 里），
+                    // 这条手势就**不安装**，横滑完全由 Pager 处理（跟手 + 惯性 + 吸附）。
+                    // 拿不到时（单独使用这一屏）保持原行为。
+                    if (drawerCtl != null) return@pointerInput
                     awaitEachGesture {
                         awaitOneWayDrag(
                             axis = DragAxis.HORIZONTAL,
@@ -794,7 +816,7 @@ fun FunctionListScreen(
                             }
                         )
                     }
-                }
+                }.then(backgroundWhenNoBlur())
         ) {
 
             // ---- 上部下滑 → 回图像 ----
@@ -824,19 +846,32 @@ fun FunctionListScreen(
                     // 量级一致，本轮**没动**。
                     .height(geometry.sy(SWIPE_DOWN_ZONE_H))
                     .pointerInput(Unit) {
-                        var accum = 0f
-                        detectVerticalDragGestures(
-                            onDragStart = { accum = 0f },
-                            onDragEnd = { accum = 0f },
-                            onDragCancel = { accum = 0f },
-                            onVerticalDrag = { _, dragAmount ->
-                                accum = if (dragAmount > 0f) accum + dragAmount else 0f
-                                if (accum > swipeDownPx) {
-                                    accum = 0f
-                                    onSwipeDown()
+                        // 同图像界面那条：用 [awaitOneWayDrag] + `abandonIfCrossAxisWins`，
+                        // 横向占优时**永久放弃**这一串 —— 否则横滑到一半手指带点向下的斜度，
+                        // 纵向先越过容差就会把抽屉瞬间拉到底（用户报的"无动画瞬移"）。
+                        awaitEachGesture {
+                            awaitOneWayDrag(
+                                axis = DragAxis.VERTICAL,
+                                positive = true,                  // 只认**向下**
+                                abandonIfCrossAxisWins = true,
+                                onDrag = { total ->
+                                    if (drawerCtl != null) {
+                                        // 从"完全展开"(1) 往下拉：
+                                        // 拉过 DRAWER_PULL_FRACTION 那么多屏高就算收到底。
+                                        drawerCtl.dragTo(
+                                            1f - total / (screenHPx * DRAWER_PULL_FRACTION)
+                                        )
+                                    }
+                                },
+                                onEnd = { total ->
+                                    if (drawerCtl != null) {
+                                        drawerCtl.release()
+                                    } else if (total > swipeDownPx) {
+                                        onSwipeDown()
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
             )
 
@@ -888,15 +923,7 @@ fun FunctionListScreen(
             // 为什么不再单独开一块盖在最上层的透明热区（上一版的做法）：
             // 见根节点那段注释 —— 它会截住它下面所有兄弟节点的指针事件，
             // 把函数行的色点点击（#4）、滑动条的长按（#3）一起吃掉。
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = metrics.sizeDp * 0.012f)
-                    .width(metrics.sizeDp * 0.011f)
-                    .height(metrics.sizeDp * 0.13f)
-                    .clip(CircleShape)
-                    .background(scheme.outlineVariant)
-            )
+            // 左侧提示条已按用户要求删除 —— 页面位置改由屏幕底部的指示点表达。
 
             // ---- 顶部：只有设置与新建两个按钮（不再写标题）----
             // 宽度：圆屏按**这一对按钮所在高度**的圆内宽度算（[toolbarWidthFraction]）、
@@ -971,7 +998,13 @@ fun FunctionListScreen(
              * 菜单的展开/让位/抓手淡出全部只由 `open` 这一个布尔驱动 —— 没有"拖多少
              * 展开多少"这种跟手中间态（用户明确要求"还没滑到另一个按钮的时候不要加动画"）。
              */
-            val undoMenu = rememberToolbarUndoMenu(metrics)
+            val undoMenu = rememberToolbarUndoMenu(
+                metrics = metrics,
+                // 教程信号：菜单一展开就算"用户找到了撤销入口"（第 15 步）
+                onOpenChanged = { open -> if (open) Tutorial.report("undo_menu") },
+                // 教程信号：撤销箭头按下（第 16 步）
+                onUndo = { Tutorial.report("undo_done") }
+            )
 
             // ---- 顶部工具条那一条：⚙ / + 两颗键 + 叠在中间的撤销菜单 ----
             //
@@ -1009,6 +1042,8 @@ fun FunctionListScreen(
                     // （见上面 `undoMenu` 那段与 `PlotMetrics.toolbarKeyAt`）。
                     // 达成之前**不消费任何事件**，所以两颗键的短按/长按照旧。
                     .then(undoMenu.gesture)
+                    // 新手教程第 15 步：高亮"这一整条"（两颗键之间的横划要在它上面做）
+                    .tutorialAnchor(TutorialAnchors.TOOLBAR)
             ) {
             Row(
                 modifier = Modifier.fillMaxSize(),
@@ -1059,6 +1094,8 @@ fun FunctionListScreen(
                         icon = Icons.Filled.Settings,
                         contentDescription = "设置（按住不放看应用信息）",
                         metrics = metrics,
+                        // 新手教程第 17 / 34 步的锚点（只登记矩形，不参与布局与命中）
+                        modifier = Modifier.tutorialAnchor(TutorialAnchors.GEAR),
                         onClick = { if (!settingsHoldLatch.eaten) onSettings() }
                     )
                 }
@@ -1117,6 +1154,8 @@ fun FunctionListScreen(
                         // 短按 = 立刻新建并进编辑器（这条路径**一点延迟都没加**）；
                         // 长按转满过的话这一句直接返回，绝不会再开编辑器。
                         containerColor = KeyPalette.accentDeep,
+                        // 新手教程第 0 / 22 步的锚点（只登记矩形，不参与布局与命中）
+                        modifier = Modifier.tutorialAnchor(TutorialAnchors.ADD),
                         onClick = { if (!addHoldLatch.eaten) onAdd() }
                     )
                 }
@@ -1206,9 +1245,22 @@ fun FunctionListScreen(
                             widthFraction = wf,
                             onEdit = { onEdit(fn.id) },
                             onProperties = { onProperties(fn.id) },
-                            onToggleVisible = { onToggleVisible(fn.id) },
-                            onPickColor = { colorPickFor = ColorTarget.OfFunction(fn.id) },
-                            onDelete = { onDelete(fn.id) }
+                            onToggleVisible = {
+                                // 先真的切显隐，再上报教程信号（第 10 / 11 步）——
+                                // 顺序反了的话上报会先换一步，界面还没变
+                                onToggleVisible(fn.id)
+                                Tutorial.report(if (fn.visible) "hidden" else "shown")
+                            },
+                            onPickColor = {
+                                colorPickFor = ColorTarget.OfFunction(fn.id)
+                                // 教程第 12 步：调色板已经打开
+                                Tutorial.report("palette_opened")
+                            },
+                            onDelete = {
+                                onDelete(fn.id)
+                                // 教程第 14 步：整行往左划到底、已经删掉
+                                Tutorial.report("row_deleted")
+                            }
                         )
                     }
                 }
@@ -1395,6 +1447,18 @@ fun FunctionListScreen(
                 }
             }
 
+            // 教程"撤销第 12 步"要关掉调色板：把这一屏的关闭函数登记给状态机。
+            // 只在组合期间有效，离开这一屏就摘掉（否则状态机会抓着一个死闭包）。
+            DisposableEffect(Unit) {
+                Tutorial.closeColorPanel = { closeColorPanel() }
+                // 撤销第 15 步（划出撤销菜单）用：把菜单自己的收起入口交出去
+                Tutorial.closeUndoMenu = { undoMenu.close() }
+                onDispose {
+                    Tutorial.closeColorPanel = null
+                    Tutorial.closeUndoMenu = null
+                }
+            }
+
             val pickId = colorPickFor
             if (pickId != null) {
                 // 当前颜色：函数和几何对象都从各自的列表里取，取值规则同一套
@@ -1457,6 +1521,8 @@ fun FunctionListScreen(
                             scale = 0.86f + 0.14f * panelAnim.value
                         )
                         .border(1.dp, KeyPalette.bubbleBorder, MaterialTheme.shapes.large)
+                        // 新手教程第 13 步的锚点（整块调色板）
+                        .tutorialAnchor(TutorialAnchors.COLOR_PALETTE)
                 ) {
                     Column(modifier = Modifier.padding(metrics.sizeDp * 0.03f)) {
                         CurvePalette.chunked(4).forEach { rowColors ->
@@ -1492,6 +1558,8 @@ fun FunctionListScreen(
                                                     is ColorTarget.OfFunction -> onColor(pickId.id, index)
                                                     is ColorTarget.OfObject -> onObjectColor(pickId.id, index)
                                                 }
+                                                // 教程第 13 步：颜色已经挑中（先上色，再推进）
+                                                Tutorial.report("color_picked")
                                                 closeColorPanel()
                                             }
                                     )
@@ -1605,6 +1673,9 @@ private fun FunctionRow(
     // （`FunctionsScreen.GraphObjectRow`）调的是同一个函数，所以"函数能删 ⟹ 对象也能删"
     // 是结构性的。用户报的"除了函数之外的对象都不能滑动删除"就出在**两行各写一套**上。
     val swipe = rememberRowSwipeDelete(fn.id, onDelete)
+    // 在抽屉里（有 Pager）时，行上的"往右"让给 Pager —— 用户要求
+    // "函数条右划可以滑动界面"。单独用这一屏时仍由行自己认领，避免"拖一下进编辑器"。
+    val yieldRightToPager = LocalDrawerController.current != null
     // 行宽的**唯一**来源：圆屏 = sizeDp × 弧宽比例（逐像素不变）、非圆屏 = 铺满可用宽度。
     // 删除位移阈值、甩出距离都从它推，所以三者永远同一个基准。
     val rowWidthDp = geometry.rowWidth(metrics, widthFraction, isRound)
@@ -1651,12 +1722,22 @@ private fun FunctionRow(
         // 滑够为止 —— 不用确认框也能看懂"松手就要删了"。
         // 底色统一到 KeyPalette：按住/选中 = 强调色，平时 = 普通键深灰。
         color = lerp(
-            if (selected) KeyPalette.accent else KeyPalette.normal,
+            when {
+                selected -> KeyPalette.accent
+                // 液态玻璃：行本身变成"一块半透明的亮面"（onSurface 7%），
+                // 底下那层 78% 的玻璃底和更下面被模糊的图像一起透上来。
+                // 注意只改颜色 —— 尺寸、位置、手势一个都没动。
+                LocalGlassTheme.current -> GlassTokens.surface
+                else -> KeyPalette.normal
+            },
             KeyPalette.danger,
             swipeProgress * SWIPE_DELETE_TINT
         ),
         shape = PillShape,
         modifier = Modifier
+            // ColorOS 16 玻璃行的上沿反光（只在液态玻璃主题下挂）。
+            // 行数量多，这里不加投影 —— 阴影要离屏，手表上列表会明显变卡。
+            .then(if (LocalGlassTheme.current) Modifier.glassSurface(PillShape) else Modifier)
             // 宽度和 [rowWidthPx] 同一个来源（圆屏弧宽 / 非圆屏满宽），避免"算宽用一套、
             // 画宽用另一套"那种只在手机上才暴露的不一致。
             .width(rowWidthDp)
@@ -1695,7 +1776,15 @@ private fun FunctionRow(
             // 本轮起这一段手势本身也搬进共用件（对象行那段和它逐字重复，还多了一条
             // 起手限制 —— 那正是"对象划不动"的真因）。`swipe.gesture(...)` 只做三件事：
             // 挂 [awaitOneWayDrag]、跟手、滑够时"先甩出去再删"，和对象行逐项一致。
-            .then(swipe.gesture(fn.id, rowWidthPx))
+            .then(
+                swipe.gesture(
+                    fn.id,
+                    rowWidthPx,
+                    yieldRightToPager = yieldRightToPager
+                )
+            )
+            // 新手教程第 14 步的锚点：整行（左滑删除在它上面做）
+            .tutorialAnchor(TutorialAnchors.row(fn.id))
     ) {
         // ---- 两个手势区共用的版面尺寸（px/dp 各一次，下面两区都按它算）----
         //
@@ -1753,7 +1842,9 @@ private fun FunctionRow(
                     )
                     // 内边距加在 clickable **之内**：手势区含边条，而内圈圆点仍居中在
                     // 原来那 0.105 的格子里 → 观感与改动前逐像素一致。
-                    .padding(start = sidePad),
+                    .padding(start = sidePad)
+                    // 新手教程第 10 / 11 / 12 步的锚点：色点这一格
+                    .tutorialAnchor(TutorialAnchors.curveDot(fn.id)),
                 contentAlignment = Alignment.Center
             ) {
                 Box(

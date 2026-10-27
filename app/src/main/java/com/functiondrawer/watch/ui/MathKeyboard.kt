@@ -24,6 +24,17 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import android.graphics.Typeface
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -54,10 +65,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
@@ -188,6 +201,14 @@ private const val TAB_FONT_SCALE = 2f / 3f
  * 远小于 1.25 倍键宽），所以调它不影响手表。
  */
 internal const val KEY_ASPECT_MAX_NONROUND = 1.25f
+
+/**
+ * 按键行高的"设计值"（占短边的比例）—— 当年 `fontSmall` 就是照着它定的。
+ *
+ * 只用来算字号缩放（见 `MathKeyboard` 里的 `keyFontScale`），
+ * 不参与布局：真正的行高由 `FunctionEditor` 的 `GRID_TOP/GRID_BOTTOM` 算出来。
+ */
+private const val FULL_KEY_H_FRACTION = 0.14775f
 
 /**
  * 一整段高度上的可用宽度 —— **"圆屏按弧宽收窄 / 非圆屏铺满屏宽"的唯一一处**。
@@ -487,6 +508,21 @@ internal fun MathKeyboard(
     val gap = grid.gap
     val rowHeight = grid.rowHeight
 
+    /**
+     * 按键字号的缩放 —— **行高变了字号必须跟着变**。
+     *
+     * 原来行高恒为 0.14775 屏高，[WatchMetrics.fontSmall] 就是照着它定的。
+     * 本轮用户要求"下面的按钮高度变成一半"，行高变成 0.0739（≈17dp）——
+     * 12sp 的字（行盒 ≈16dp）几乎顶满，字的上/下沿会被胶囊圆角切掉。
+     *
+     * 这里按"当前行高 / 设计行高"取比例，并夹在 0.58 以上：
+     * 再小就真的看不清了，宁可让字挤一点。
+     * 非圆屏（手机）行高远大于设计值，比例会被夹到 1 —— 手机上字号不变。
+     */
+    val keyFontScale = (
+        rowHeight / (metrics.sizeDp * FULL_KEY_H_FRACTION)
+        ).coerceIn(0.58f, 1f)
+
     // 选择栏（页签那一排）**就是网格的第 1 行**：高度和按键一样、缝也一样，
     // 位置由网格反推（`gridTop − 缝 − 行高`）。
     //
@@ -567,8 +603,19 @@ internal fun MathKeyboard(
                     selected = p == page,
                     metrics = metrics,
                     onClick = { onSelectPage(p) },
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    shape = keyShape
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        // 教程要圈住"初等 / 123"这两个页签（见 TutorialAnchors）
+                        .then(
+                            when (p) {
+                                KeyPage.ELEMENTARY -> Modifier.tutorialAnchor(TutorialAnchors.TAB_ELEMENTARY)
+                                KeyPage.DIGITS -> Modifier.tutorialAnchor(TutorialAnchors.TAB_DIGITS)
+                                else -> Modifier
+                            }
+                        ),
+                    shape = keyShape,
+                    fontScale = keyFontScale
                 )
             }
             if (rangeLabel != null) {
@@ -584,7 +631,8 @@ internal fun MathKeyboard(
                     metrics = metrics,
                     onClick = onCycleRange,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    shape = keyShape
+                    shape = keyShape,
+                    fontScale = keyFontScale
                 )
             }
         }
@@ -692,11 +740,22 @@ internal fun MathKeyboard(
                                 key
                             }
                             val openBubble: () -> Unit =
-                                { bubble = BubbleState(base.label, variants, key.label) }
+                                {
+                                    // 先取"是否放行"再通知状态机：通知会推进教程，
+                                    // 可能把此刻的判断条件改掉（顺序不能反）。
+                                    if (!Tutorial.suppressLongPress()) {
+                                        Tutorial.onLongPress(base.label)
+                                        bubble = BubbleState(base.label, variants, key.label)
+                                    }
+                                }
                             KeyButton(
                                 key = shownKey,
                                 metrics = metrics,
+                                fontScale = keyFontScale,
                                 onClick = {
+                                    // 先上报再执行：按键一按下去界面就可能切屏（比如 ✓），
+                                    // 晚一步这条信号就丢了。
+                                    Tutorial.onKeyPressed(shownKey.label)
                                     // 两个**动作键**各走自己的回调：它们都不插文本。
                                     //   角度制键 = RAD ↔ DEG（见 onToggleAngleUnit 的说明）；
                                     //   abc 键 = 打开内置英文字母表键盘（见 onOpenAlphabet）。
@@ -723,7 +782,18 @@ internal fun MathKeyboard(
                                 // OTHER 页第 3 行是「空格 3 + abc 1」，
                                 // 于是空格占 3/4 行宽、abc 占 1/4，两颗键之间的缝
                                 // 仍然是 Row 的 Arrangement.spacedBy(gap)，和别处一样。
-                                modifier = Modifier.weight(key.weight.toFloat()).fillMaxHeight()
+                                modifier = Modifier
+                                    .weight(key.weight.toFloat())
+                                    .fillMaxHeight()
+                                    // 教程要圈住 `sin`（第 2/4 步）和数字页的 `x`（第 6 步）。
+                                    // 判据用**基键**的 label：sin 换成 sinh 之后仍圈同一颗键。
+                                    .then(
+                                        when (base.label) {
+                                            "sin" -> Modifier.tutorialAnchor(TutorialAnchors.KEY_SIN)
+                                            "x" -> Modifier.tutorialAnchor(TutorialAnchors.KEY_X)
+                                            else -> Modifier
+                                        }
+                                    )
                             )
                         }
                     }
@@ -756,6 +826,7 @@ internal fun MathKeyboard(
                 // applyVariantSelection / resolvedKey）：输入框里已经有式子的时候，
                 // 误点一下不该往光标处塞一个 asinh()
                 onPick = { picked ->
+                    Tutorial.onVariantPicked(picked.label)
                     selections = applyVariantSelection(selections, shown.baseLabel, picked.label)
                 },
                 onDismiss = { bubble = null },
@@ -798,7 +869,9 @@ private fun TabChip(
     accent: Boolean = false,
     compact: Boolean = false,
     /** 和按键用同一个形状（胶囊），选择栏看起来就是网格的第 1 行。 */
-    shape: Shape = PillShape
+    shape: Shape = PillShape,
+    /** 字号缩放：和按键同一套（行高减半时字也小下去）。 */
+    fontScale: Float = 1f
 ) {
     val scheme = MaterialTheme.colors
     // 页签配色对齐 Culculator 的 bg_btn_dark_toggle.xml：
@@ -819,7 +892,7 @@ private fun TabChip(
         color = container,
         contentColor = content,
         shape = shape,
-        modifier = modifier.clickable(onClick = onClick)
+        modifier = modifier.then(if (LocalGlassTheme.current) Modifier.glassSurface(PillShape) else Modifier).clickable(onClick = onClick)
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
@@ -827,7 +900,11 @@ private fun TabChip(
                 // 选择栏这一排仍是 fontKey + Normal（选中与否只靠底色区分）——
                 // 但用户要求"选择栏的汉字调小 1/3"，所以这里乘 2/3：
                 // 「初等 / 字母 / 其他」两个汉字在 233dp 屏上原本会顶到 chip 边缘。
-                fontSize = if (compact) metrics.fontTiny else metrics.fontKey * TAB_FONT_SCALE,
+                fontSize = if (compact) {
+                    metrics.fontTiny * fontScale
+                } else {
+                    metrics.fontKey * TAB_FONT_SCALE * fontScale
+                },
                 fontWeight = FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -875,7 +952,9 @@ private fun KeyButton(
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
     /** 圆角形状：默认就是一整颗胶囊（见 [PillShape]）。 */
-    shape: Shape = PillShape
+    shape: Shape = PillShape,
+    /** 字号缩放：行高减半时字也要小下去（见 `keyFontScale` 的说明）。 */
+    fontScale: Float = 1f
 ) {
     // 三个色调对应 Culculator 的三个按键 drawable（见 WatchColors.KeyPalette 的表）。
     // 文字统一纯白：它的按键全是 #FFF，不分色调。
@@ -889,6 +968,12 @@ private fun KeyButton(
     } else {
         Modifier.clickable(onClick = onClick)
     }
+    // 长按横线贴的是**字形下沿**（基线），不是整颗键的底边 ——
+    // 用户原话："可以长按的按钮下面的阴影条和按钮字符要紧贴，现在还是太远了，
+    // n 次根号的按键的阴影条和字符的距离就很好。"
+    // 所以先量出这一行文字的基线（和 [ⁿ√] 键用 `icon.ascent` 是同一个基准），
+    // 再在基线下面 2px 处画线。按 `size.height * 0.86f` 算会跑到键底。
+    var textBaseline by remember { mutableStateOf(0f) }
     Surface(
         color = container,
         contentColor = content,
@@ -897,11 +982,44 @@ private fun KeyButton(
             .fillMaxWidth()
             .then(tap)
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // ---- n 次根号键：**图标用虚线框** ----
+            //
+            // 用户原话："我是说图标用虚线框，实际运算用阴影框"、"n 次根号的图标也和
+            // GeoGebra 一样，GeoGebra 是做成根号指数的位置用虚线圈着"。
+            // 所以这颗键不再用字符 `ⁿ√` 拼，而是直接用排版引擎画 `root(x,)`：
+            // 根号指数那一格是空的，正好落在左上角的虚线框里（见 MathRender 的
+            // [SlotStyle.DASHED]），被开方数画个 `x` —— 和 GeoGebra 那颗键一个样子。
+            // 只有这一颗键需要特殊字形，别的键仍是纯文字。
+            if (key.action is KeyAction.Insert && key.action.text == "root(,)") {
+                val context = LocalContext.current
+                val fonts = remember(context) { MathFontCache.get(context) }
+                val px = with(LocalDensity.current) { metrics.fontSmall.toPx() } * fontScale
+                val icon = remember(px, fonts) {
+                    layoutMath("root(x,)", px, Float.MAX_VALUE, fonts, SlotStyle.DASHED)
+                }
+                Canvas(Modifier.fillMaxSize()) {
+                    val iconX = (size.width - icon.width) / 2f
+                    val iconY = (size.height - icon.height) / 2f
+                    icon.draw(this, Offset(iconX, iconY), content)
+                    // 长按横线：和其它可长按键一样（见下面 Text 分支的说明）。
+                    // 这里不能按整颗键的高度算 —— 图标只占中间一小块，
+                    // 横线要贴着**字形下沿**（基线再往下一点），否则会跑到键底。
+                    if (onLongClick != null) {
+                        val y = iconY + icon.ascent + 2f
+                        drawLine(
+                            color = content.copy(alpha = 0.35f),
+                            start = Offset(iconX + icon.width * 0.16f, y),
+                            end = Offset(iconX + icon.width * 0.84f, y),
+                            strokeWidth = 1.2f
+                        )
+                    }
+                }
+            } else {
             Text(
                 text = key.label,
                 // 比选择栏的汉字小一档：按键上要放得下函数名（见上面的键宽核算）
-                fontSize = metrics.fontSmall,
+                fontSize = metrics.fontSmall * fontScale,
                 // 和汉字标签同粗细（原来是 Medium，比汉字显粗）
                 fontWeight = FontWeight.Normal,
                 maxLines = 1,
@@ -909,8 +1027,32 @@ private fun KeyButton(
                 // 最窄的第 3 行只剩 `+ − × ÷` 这种单字符。Ellipsis 是兜底：
                 // 万一以后又往窄行塞长标签，宁可收一个"…"也别把字母拦腰切断。
                 overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                // 量基线：横线要贴着字形下沿画（见上面 [textBaseline] 的说明）。
+                onTextLayout = { layout ->
+                    if (layout.lineCount > 0) textBaseline = layout.getLineBaseline(0)
+                },
+                // **能长按的键**在文字下面画一条细横线（用户原话："给可以长按的
+                // 按键的图标或文本下加一条淡黑色的横线，夜间模式变成淡白色"）。
+                // 横线紧贴字形下沿（不是贴着按键底边），颜色取按键文字的 35% 透明度：
+                // 白天主题的文字是深色 → 淡黑；夜间是白色 → 淡白，一个表达式两种情况都对。
+                modifier = if (onLongClick != null) {
+                    Modifier.drawWithContent {
+                        drawContent()
+                        // 基线 + 2px = 字形下沿；量不到基线时退回老算法。
+                        val y = if (textBaseline > 0f) textBaseline + 2f else size.height * 0.86f
+                        drawLine(
+                            color = content.copy(alpha = 0.35f),
+                            start = Offset(size.width * 0.28f, y),
+                            end = Offset(size.width * 0.72f, y),
+                            strokeWidth = 1.2f
+                        )
+                    }
+                } else {
+                    Modifier
+                }
             )
+            }
         }
     }
 }
@@ -1104,7 +1246,17 @@ private fun VariantBubble(
                                 dismiss()
                             }
                         },
-                        modifier = Modifier.weight(1f).fillMaxHeight()
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            // 教程要圈住气泡里的 `sinh`（第 3 步）
+                            .then(
+                                if (variant.label == "sinh") {
+                                    Modifier.tutorialAnchor(TutorialAnchors.VARIANT_SINH)
+                                } else {
+                                    Modifier
+                                }
+                            )
                     )
                 }
             }
@@ -1129,7 +1281,7 @@ private fun VariantChip(
         color = if (selected) KeyPalette.accent else KeyPalette.normal,
         contentColor = KeyPalette.text,
         shape = PillShape,
-        modifier = modifier.clickable(onClick = onClick)
+        modifier = modifier.then(if (LocalGlassTheme.current) Modifier.glassSurface(PillShape) else Modifier).clickable(onClick = onClick)
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
@@ -1163,6 +1315,43 @@ private fun VariantChip(
  * 算好、一路传到这里，只是编辑器这一轮不再画它（要恢复内联提示的话，
  * 只需要在这里重新用上它）。
  */
+/**
+ * 表达式显示框 —— **数学排版版**。
+ *
+ * 刻意**不用** TextField：手表上系统输入法完全不可用（弹出来能占满整块屏），
+ * 所以我们自己画光标、自己做增删。光标位置由 [cursor] 给定。
+ *
+ * ## 这一轮改了两件事
+ *
+ * ### 1. 不再画源码，改画**排版后的公式**（对标 GeoGebra）
+ *
+ * 用户原话："看一大堆符号太难受了，所有的语法显示对标 geogebra。"
+ *
+ * 具体做法见 [layoutMath]：`sqrt(x^2+1)/2` 会被排成
+ * "一个根号盖住 x²+1、下面一条横线、下面是 2"。分式、上标、根号、希腊字母、
+ * 函数名正体、变量斜体 —— 这些是"一眼能读懂"和"一串符号"的差别。
+ *
+ * 公式的**源码一个字都没变**：`fn.src1` 仍然是用户敲的那一串，
+ * 排版只是显示层。所以保存、求值、光标增删逻辑全都不受影响。
+ *
+ * ### 2. 光标可以**点 / 拖**到任意位置
+ *
+ * 原来点一下只会把光标放到末尾（`onTap = { cursor = text.length }`），
+ * 想改中间某个字符只能一路退格。现在：
+ *   * `onCursorMove` 非空时，点击、拖动都会把落点换算成最近的**字符边界**；
+ *   * 换算依据是排版时登记的 [MathLayout.indexAt]（每个字符都有自己的 x 区间），
+ *     所以"点到分式的分母上"也能落在正确的字符之间。
+ *
+ * `onCursorMove` 传 null 时退回老行为（点一下触发 [onTap]），
+ * `PropertyEditor` 的函数名输入就是这种用法 —— 那不是公式，不做数学排版。
+ *
+ * ## 高度
+ *
+ * 卡片高度由调用方给。`FunctionEditor` 这一轮把它调成了**原来的三倍**
+ * （0.345 屏高 ≈ 80dp），正好是一个分式 + 一点呼吸的高度。
+ * 垂直方向公式**居中**；横向超宽时先整体等比缩小（下限 55%），
+ * 仍超宽就按光标位置横向滚动。
+ */
 @Composable
 fun ExpressionField(
     text: String,
@@ -1174,11 +1363,22 @@ fun ExpressionField(
     onTap: () -> Unit = {},
     error: String? = null,
     /** 圆角形状：调用方按卡片高度算，和同一行的 ⌫ 用同一个。 */
-    shape: Shape = MaterialTheme.shapes.small
+    shape: Shape = MaterialTheme.shapes.small,
+    /**
+     * 是否按数学公式排版。
+     *
+     * `false` = 老的等宽文本显示（函数名输入用：`a` 不该变斜体，
+     * `f` 也不该被当成变量）。
+     */
+    math: Boolean = true,
+    /**
+     * 光标被点/拖到某个字符位置时回调（0..text.length）。
+     *
+     * `null` = 不支持拖动定位，点一下只触发 [onTap]（老行为）。
+     */
+    onCursorMove: ((Int) -> Unit)? = null
 ) {
     val scheme = MaterialTheme.colors
-    val scroll = rememberScrollState()
-    val density = LocalDensity.current
     val caretColor = if (focused) scheme.primary else scheme.outline
 
     val blink by rememberInfiniteTransition(label = "caret").animateFloat(
@@ -1191,78 +1391,253 @@ fun ExpressionField(
         label = "caretAlpha"
     )
 
-    // 打字时光标基本都在末尾，直接滚到底最省事
-    LaunchedEffect(text, cursor) {
-        if (cursor >= text.length) scroll.animateScrollTo(scroll.maxValue)
-    }
-
-    // 只有一档字号：卡片恒为一行高，不再为"有报错的那一档"缩字号。
-    val exprFont = metrics.fontExpr
-    // 上下内边距按 0.010 屏高（2.3dp）给：卡片 26.8dp 里减去 4.6dp 还剩 22.2dp，
-    // 而 fontExpr（17.5sp）一行约 20.5dp —— 留出 1.6dp 余量。
-    // 再大就会顶到卡片边界，字的上/下沿会被 Surface 的圆角裁掉。
-    val padV = metrics.sizeDp * 0.010f
-
     val safeCursor = cursor.coerceIn(0, text.length)
-    val before = text.substring(0, safeCursor)
-    val after = text.substring(safeCursor)
-    val caretHeight = with(density) { (exprFont * 1.15f).toDp() }
 
     Surface(
         // 输入框卡片也统一到 KeyPalette 的扁平语言：
         // 失焦 = 普通键深灰，聚焦 = 强调色（"这个框正在被输入"一眼可见）。
-        // 原来的 surfaceContainerHighest/High 是 MD3 的层级灰，和键盘放一起偏"另一种设计"。
         color = if (focused) KeyPalette.accent else KeyPalette.normal,
         shape = shape,
-        modifier = modifier.clickable(onClick = onTap)
+        modifier = modifier.then(if (LocalGlassTheme.current) Modifier.glassSurface(shape) else Modifier).clickable(onClick = onTap)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = metrics.contentPad * 0.6f, vertical = padV),
-            verticalArrangement = Arrangement.Center
-        ) {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                if (text.isEmpty()) {
-                    Text(
-                        text = hint,
-                        fontSize = exprFont,
-                        color = KeyPalette.textMuted.copy(alpha = 0.55f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+        if (math) {
+            MathFormulaBody(
+                text = text,
+                cursor = safeCursor,
+                hint = hint,
+                metrics = metrics,
+                caretColor = caretColor,
+                caretAlpha = blink,
+                onCursorMove = onCursorMove
+            )
+        } else {
+            PlainTextBody(
+                text = text,
+                cursor = safeCursor,
+                hint = hint,
+                metrics = metrics,
+                caretColor = caretColor,
+                caretAlpha = blink
+            )
+        }
+    }
+}
+
+/**
+ * 数学排版正文（[ExpressionField] 的 `math = true` 分支）。
+ *
+ * 三件事：排一次版 → 画 → 处理点击/拖动定位。
+ * 排版结果用 `remember(text, 字号, 可用宽高)` 缓存：拖动光标、闪烁这些
+ * 高频状态变化不会触发重排，只有文本或尺寸变了才重排。
+ */
+@Composable
+private fun MathFormulaBody(
+    text: String,
+    cursor: Int,
+    hint: String,
+    metrics: WatchMetrics,
+    caretColor: Color,
+    caretAlpha: Float,
+    onCursorMove: ((Int) -> Unit)?
+) {
+    val density = LocalDensity.current
+    val context = LocalContext.current
+    val padH = metrics.contentPad * 0.6f
+    val basePx = with(density) { metrics.fontExpr.toPx() }
+
+    /**
+     * KaTeX 的两个字体（`assets/fonts/`，合计 88KB）。
+     *
+     * 走 [MathFontCache]：预编译阶段就把两个 ttf 解析好，
+     * 所以**第一次**打开输入框也不会在首帧上付 `Typeface.createFromAsset` 的钱。
+     * 缓存里已经兜住了资源缺失的情况（返回 null = 退回系统字体）。
+     */
+    val fonts = remember(context) { MathFontCache.get(context) }
+
+    if (text.isEmpty()) {
+        // 空输入显示提示（和原来一致）：提示也走排版，`x = cos t` 里的 `t` 会是斜体
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val w = (constraints.maxWidth - with(density) { padH.toPx() } * 2f)
+                    .coerceAtLeast(1f)
+                val layout = remember(hint, w, basePx, fonts) {
+                    layoutMath(hint, basePx * 0.9f, w, fonts)
                 }
-                Row(
-                    modifier = Modifier.horizontalScroll(scroll),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = before,
-                        fontSize = exprFont,
-                        color = KeyPalette.text,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
+                Canvas(Modifier.fillMaxSize()) {
+                    val padPx = with(density) { padH.toPx() }
+                    val origin = Offset(
+                        // 提示同样居中（用户要求输入框里的内容居中显示）
+                        x = padPx + (size.width - padPx * 2f - layout.width) / 2f,
+                        y = (size.height - layout.height) / 2f
                     )
-                    Box(
-                        modifier = Modifier
-                            .width(metrics.caretWidth)
-                            .height(caretHeight)
-                            .background(caretColor.copy(alpha = blink))
-                    )
-                    Text(
-                        text = after,
-                        fontSize = exprFont,
-                        color = KeyPalette.text,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
-                    )
+                    layout.draw(this, origin, KeyPalette.textMuted.copy(alpha = 0.55f))
                 }
             }
-            // 这里**故意没有**第二行报错文字：卡片只有一行高，
-            // 报错由调用方在点确定之后弹 toast。
+        }
+        return
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val availW = (constraints.maxWidth - with(density) { padH.toPx() } * 2f)
+            .coerceAtLeast(1f)
+        val availH = constraints.maxHeight.toFloat()
+
+        // 先按宽度排；如果高度溢出（三倍高的卡片一般不会，但手机上窄屏会），
+        // 再按高度缩一次 —— 最多两趟，不做迭代求解。
+        val layout = remember(text, availW, availH, basePx, fonts) {
+            var l = layoutMath(text, basePx, availW, fonts)
+            if (l.height > availH && l.height > 0f) {
+                l = layoutMath(text, basePx * (availH / l.height) * 0.98f, availW, fonts)
+            }
+            l
+        }
+
+        // ---- 横向滚动：让光标始终留在可见区里 ----
+        val caretX = layout.caretX(cursor)
+        val maxScroll = (layout.width - availW).coerceAtLeast(0f)
+        val targetScroll = (caretX - availW * 0.72f).coerceIn(0f, maxScroll)
+        val scrollX by animateFloatAsState(
+            targetValue = targetScroll,
+            animationSpec = tween(durationMillis = 110),
+            label = "fieldScroll"
+        )
+
+        /**
+         * 公式左上角在 Canvas 里的 x。
+         *
+         * **居中是这一版新加的**（用户要求"输入框里的文字居中显示"），
+         * 它同时也是**命中测试的原点** —— 手势那边必须减掉同一个数，
+         * 否则点中间会落到左边（偏移量正好是半个空白宽度）。
+         */
+        val padPx = with(density) { padH.toPx() }
+        val availPx = (availW).coerceAtLeast(1f)
+        val originX = if (layout.width <= availPx) {
+            padPx + (availPx - layout.width) / 2f
+        } else {
+            padPx - scrollX
+        }
+
+        // 手势里要读"最新"的排版和滚动量；pointerInput(Unit) 只跑一次，
+        // 直接捕获会拿到首次组合时的对象（表冠滑条那一轮踩过同样的坑）。
+        val layoutNow = rememberUpdatedState(layout)
+        val originXNow = rememberUpdatedState(originX)
+        val moveNow = rememberUpdatedState(onCursorMove)
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures { pos ->
+                        val move = moveNow.value
+                        if (move != null) {
+                            // 减掉**公式原点**（居中的话就是居中后的左边缘），
+                            // 换算成"相对公式左边"的 x，再找最近的字符边界
+                            move(layoutNow.value.indexAt(pos.x - originXNow.value))
+                        }
+                    }
+                }
+                .pointerInput(Unit) {
+                    // 拖动 = 连续定位（手指划过哪里，光标跟到哪里）
+                    detectDragGestures { change, _ ->
+                        val move = moveNow.value ?: return@detectDragGestures
+                        move(layoutNow.value.indexAt(change.position.x - originXNow.value))
+                        change.consume()
+                    }
+                }
+        ) {
+            // originX 在组合阶段算好了（见上面那段注释），这里直接用同一个值 ——
+            // 绘制和命中测试必须共用同一个原点。
+            val origin = Offset(
+                x = originX,
+                y = (size.height - layout.height) / 2f
+            )
+            clipRect(0f, 0f, size.width, size.height) {
+                layout.draw(
+                    scope = this,
+                    origin = origin,
+                    color = KeyPalette.text,
+                    caretIndex = cursor,
+                    caretColor = caretColor,
+                    caretAlpha = caretAlpha,
+                    caretWidth = with(density) { metrics.caretWidth.toPx() }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 老的非数学正文（函数名输入用）。
+ *
+ * 逻辑和本轮之前完全一致：等宽字、`before + 光标 + after` 三段横排、
+ * 打字时滚到末尾。它不支持拖动定位（函数名就那么几个字母，没必要）。
+ */
+@Composable
+private fun PlainTextBody(
+    text: String,
+    cursor: Int,
+    hint: String,
+    metrics: WatchMetrics,
+    caretColor: Color,
+    caretAlpha: Float
+) {
+    val scroll = rememberScrollState()
+    val density = LocalDensity.current
+    val exprFont = metrics.fontExpr
+    val padV = metrics.sizeDp * 0.010f
+
+    LaunchedEffect(text, cursor) {
+        if (cursor >= text.length) scroll.animateScrollTo(scroll.maxValue)
+    }
+
+    val before = text.substring(0, cursor)
+    val after = text.substring(cursor)
+    val caretHeight = with(density) { (exprFont * 1.15f).toDp() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = metrics.contentPad * 0.6f, vertical = padV),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (text.isEmpty()) {
+                Text(
+                    text = hint,
+                    fontSize = exprFont,
+                    color = KeyPalette.textMuted.copy(alpha = 0.55f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.horizontalScroll(scroll),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = before,
+                    fontSize = exprFont,
+                    color = KeyPalette.text,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+                Box(
+                    modifier = Modifier
+                        .width(metrics.caretWidth)
+                        .height(caretHeight)
+                        .background(caretColor.copy(alpha = caretAlpha))
+                )
+                Text(
+                    text = after,
+                    fontSize = exprFont,
+                    color = KeyPalette.text,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

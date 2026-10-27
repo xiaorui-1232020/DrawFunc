@@ -61,7 +61,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -547,7 +546,7 @@ fun NameDialog(
     BackHandler(enabled = true) { dismissThen(onCancel) }
 
     // ---- 几何（数字与算式见 KDoc 的"位置 / 宽度 / 版面顺序"三节）----
-    val isRound = LocalConfiguration.current.isScreenRound
+    val isRound = isRoundScreen()
     // 圆屏的**宽度比例**：按"四角仍在圆内"那条算式（[CARD_WIDTH_LIMIT]，圆角矩形的**真实形状**）
     // 再留 7% 余量。推导、三块屏的实算、以及"为什么居中是最优的"都写在 KDoc 的"宽度"一节。
     // 非圆屏用不到这个比例 —— 那边走 `ScreenGeometry.rowWidth(...)`（真实屏宽 − 左右各 3%），
@@ -810,7 +809,10 @@ fun NameDialog(
                     containerColor = KeyPalette.accent,
                     enabled = !saving,
                     alpha = keyAlpha,
-                    modifier = Modifier.weight(1f),
+                    // 教程第 23 步要圈住这颗 ✓
+                    modifier = Modifier
+                        .weight(1f)
+                        .tutorialAnchor(TutorialAnchors.DIALOG_CONFIRM),
                     // 确认**不播退场**：关不关、什么时候关由调用方说了算
                     // （校验失败时对话框必须留着），见 KDoc 的"已知限制"。
                     onClick = { onConfirm(name) }
@@ -887,13 +889,14 @@ private fun DialogIconKey(
             )
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // 按下时叠一层很淡的白 = "亮一档"（和 MiniChip / WatchIconButton 同一套机制，
+            // 按下时叠一层很淡的覆盖色 = 明度挪一档（夜间白 / 白天深色，见 KeyPalette.pressGlow；
+            // 和 MiniChip / WatchIconButton 同一套机制，
             // 画在 Icon 之前，所以图标永远在最上面）
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { this.alpha = press.glowAlpha }
-                    .background(Color.White)
+                    .background(KeyPalette.pressGlow)
             )
             if (label == null) {
                 Icon(

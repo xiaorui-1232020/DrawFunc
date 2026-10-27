@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -57,6 +57,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.roundToLong
+import androidx.compose.ui.graphics.Color
 
 // ---------------------------------------------------------------------------
 // 纵向布局（比例都是**真实屏高**的占比；圆表上真实屏高 == 短边，所以一个数都没变）。
@@ -117,9 +118,46 @@ import kotlin.math.roundToLong
 // ---------------------------------------------------------------------------
 private const val TOP_Y = 0.088f
 private const val TOP_H = 0.092f
-private const val FIELD_Y = 0.192f
-/** 表达式卡片的高度 —— 卡片**永远只有一行**（报错不再显示在卡片里）。 */
-private const val FIELD_H = 0.115f
+
+/*
+ * ===========================================================================
+ * 本轮改的纵向分区（用户 2026-10-27 的要求）
+ * ===========================================================================
+ *
+ * 原话："函数创建界面的输入框高度还没调整，输入框高度变成原来的一半，
+ * 按钮高度变成原来的两倍。"
+ *
+ * 上一版（输入框 ×3、按键 ÷2）把卡片拉到 0.345 高、按键压到 0.0739，
+ * 结果是输入框吃掉半屏、键盘变成一排小键。这一版整体反过来：
+ *
+ * | | 上一版 | 这一版 |
+ * |---|---|---|
+ * | 输入框（[FIELD_Y] / [FIELD_H]） | 0.196 / 0.345 | 0.190 / **0.1725**（÷2） |
+ * | 选择栏（[TAB_Y] / [TAB_H]） | 0.6174 / 0.0739 | 0.3705 / **0.1356**（×2） |
+ * | 键盘网格（[GRID_TOP] / [GRID_BOTTOM]） | 0.6993 / 0.945 | 0.5141 / 0.945 |
+ * | 单个按键行高 | 0.0739 | **0.1356**（×2） |
+ *
+ * 账本（单位 = 短边，也就是圆屏屏高）：
+ *   输入框 0.190~0.3625 → 缝 0.008 → 选择栏 0.3705~0.5061
+ *   → 缝 0.008 → 网格 0.5141~0.945
+ * 四项加起来正好塞满，键盘不会被顶出屏幕。
+ *
+ * 圆屏分支逐像素用这些常数；非圆屏（手机）由 [keyGridMetrics] 按**真实屏高**
+ * 重算行高，只有 [GRID_TOP] / [GRID_BOTTOM] 这两个边界会被用到。
+ */
+private const val FIELD_Y = 0.190f
+
+/**
+ * 表达式卡片的高度 —— **上一版的一半**（0.345 → 0.1725）。
+ *
+ * 用户原话："函数创建界面的输入框高度还没调整，输入框高度变成原来的一半，
+ * 按钮高度变成原来的两倍。"
+ *
+ * 上一版为了排下两三行的 LaTeX 公式把卡片拉到了三倍高，结果输入框占掉了
+ * 半屏、键盘被压成一排小键。这一版反过来：卡片回到"一行公式 + 一点呼吸"
+ * （≈40dp，仍能放下一个分式），省下来的高度全部还给键盘。
+ */
+private const val FIELD_H = 0.1725f
 /**
  * 行距：按键行与行之间、以及选择栏与网格之间，用的是同一个值。
  *
@@ -133,11 +171,21 @@ private const val FIELD_H = 0.115f
  * 否则选择栏和按键不再等高 —— 这是上一轮真机反馈过的问题。
  */
 private const val GAP_FRACTION = 0.008f
-/** 选择栏的顶边。 */
-private const val TAB_Y = 0.322f
-/** 选择栏那一个 chip 的高度 = **一个按键的高度** = pitch − GAP_FRACTION（推导见上面的注释）。 */
-private const val TAB_H = 0.14775f
-private const val GRID_TOP = 0.47775f
+/** 选择栏的顶边（= [GRID_TOP] − [GAP_FRACTION] − [TAB_H]，三个数必须同时改）。 */
+private const val TAB_Y = 0.3705f
+/** 选择栏那一个 chip 的高度 = **一个按键的高度** = pitch − GAP_FRACTION（现在是两倍）。 */
+private const val TAB_H = 0.1356f
+/**
+ * 键盘网格的顶 / 底。
+ *
+ * 底（0.945）不动，顶从 0.6993 上移回 0.5141 —— 这样网格总高 0.4309，
+ * 三行平摊下来每行 pitch = 0.14363、行高 0.13563，比上一版的 0.0739
+ * **大将近一倍**（用户要的"按钮高度变成原来的两倍"）。
+ *
+ * 账本：输入框底 0.3625 → 缝 0.008 → 选择栏 0.3705~0.5061 → 缝 0.008 →
+ * 网格 0.5141~0.945。四项加起来正好塞满，键盘不会被顶出屏幕。
+ */
+private const val GRID_TOP = 0.5141f
 private const val GRID_BOTTOM = 0.945f
 
 /**
@@ -325,6 +373,12 @@ fun FunctionEditorScreen(
 ) {
     // 每个函数进来都停在数字那一页（KeyPage.DIGITS）：绝大多数输入都是数字
     var page by remember(fn.id) { mutableStateOf(KeyPage.DIGITS) }
+    // 教程"上一步"要撤销第 5 步（切到数字页）：把这一屏的切页函数登记给状态机。
+    // 只在编辑器活着的时候登记，离开编辑器就摘掉，免得反向操作打到已经不在的界面上。
+    DisposableEffect(fn.id) {
+        Tutorial.setEditorPage = { page = it }
+        onDispose { Tutorial.setEditorPage = null }
+    }
     // 参数方程有两个输入框，0 = x(t)，1 = y(t)
     var focus by remember(fn.id) { mutableStateOf(0) }
     var cursor1 by remember(fn.id) { mutableStateOf(fn.src1.length) }
@@ -374,6 +428,14 @@ fun FunctionEditorScreen(
     // 卡片**永远只有一行高**：报错文字不再画在输入框下面（改由调用方弹 toast），
     // 所以这里没有"有错时变高"的第二种高度，⌫ 也就永远和它等高。
     val fieldHeight = metrics.sizeDp * FIELD_H
+    /**
+     * 输入框那一行里**小控件**（⌫、名字提示 chip）的高度。
+     *
+     * ⌫ 现在取**一个按键的高度**（[TAB_H]）：这一版把按键调大了，⌫ 要是还按
+     * 老的那个 0.115 走，就会比键盘里的键矮一截，看起来像"另一个控件"。
+     * 它仍然在 0.1725 高的卡片里垂直居中，读起来就是"右边挂了一颗圆键"。
+     */
+    val rowKeyHeight = metrics.sizeDp * TAB_H
     // 选择栏第 5 个（紫色/第三色）chip：**只在极坐标模式下显示**。
     //
     // 用户要求："在这个界面不显示选择栏第五个紫色按钮"，
@@ -398,7 +460,18 @@ fun FunctionEditorScreen(
      */
     val fieldShape = watchShapeOf(fieldHeight)
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .background(
+                // 回到 3.45 的写法：有背景可透 → 62% 底色；否则透明（交给外层实色）。
+                if (LocalGlassTheme.current) {
+                    MaterialTheme.colors.background.copy(alpha = GLASS_PAGE_MASK_ALPHA)
+                } else {
+                    Color.Transparent
+                }
+            )
+    ) {
 
         // ---- 真实可用尺寸（不是短边）----
         //
@@ -416,7 +489,7 @@ fun FunctionEditorScreen(
         //     `metrics.sizeDp`，也就是继续按短边缩放 —— 长条屏上不会被拉成巨大的方块；
         //   * **宽度** → 圆屏走原来的弧宽公式（逐像素不变），非圆屏铺满屏宽减左右余量。
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
-        val isRound = LocalConfiguration.current.isScreenRound
+        val isRound = isRoundScreen()
 
         /**
          * 给**一整段高度**算可用宽度，取上下边缘里更窄的那一处。
@@ -506,9 +579,16 @@ fun FunctionEditorScreen(
                 modifier = Modifier
                     // 同「取消」：图标键属于 README 里那个例外，宽度=比例×短边、形状锁死
                     .width(metrics.sizeDp * 0.16f)
-                    .height(metrics.sizeDp * TOP_H * 0.85f),
+                    .height(metrics.sizeDp * TOP_H * 0.85f)
+                    // 新手教程第 7 步的锚点
+                    .tutorialAnchor(TutorialAnchors.DONE),
                 filled = true,
-                onClick = onDone
+                onClick = {
+                    // 教程第 7 步：这一步靠"路由回到图像界面"推进；
+                    // onConfirm 只是把"用户点了完成"记一下（状态机里是空操作）。
+                    Tutorial.onConfirm()
+                    onDone()
+                }
             )
         }
 
@@ -536,7 +616,10 @@ fun FunctionEditorScreen(
                     focused = focus == 0,
                     error = error,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    onTap = { focus = 0; cursor1 = fn.src1.length },
+                    // 点一下 = 聚焦（光标停在原位，不再无条件跳到末尾）
+                    onTap = { focus = 0 },
+                    // 点 / 拖到公式里任意位置 = 光标落在那儿（见 ExpressionField 的说明）
+                    onCursorMove = { focus = 0; cursor1 = it },
                     shape = fieldShape
                 )
                 ExpressionField(
@@ -547,20 +630,27 @@ fun FunctionEditorScreen(
                     focused = focus == 1,
                     error = error,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    onTap = { focus = 1; cursor2 = fn.src2.length },
+                    onTap = { focus = 1 },
+                    onCursorMove = { focus = 1; cursor2 = it },
                     shape = fieldShape
                 )
                 NameHintChip(
                     choices = nameChoices,
                     metrics = metrics,
+                    height = rowKeyHeight,
                     // 宽度按可用宽度基准（圆屏逐像素不变），见 HINT_W_FRACTION
-                    width = hintWidth
+                    width = hintWidth,
+                    modifier = Modifier.align(Alignment.CenterVertically)
                 ) { showNamePicker = true }
                 // 两个输入框共用一个 ⌫：它只作用于当前有焦点的那个框（见 applyKey）
                 BackspaceKey(
                     metrics = metrics,
                     onKey = ::applyKey,
-                    modifier = Modifier.width(delWidth).fillMaxHeight(),
+                    // 高度固定成 rowKeyHeight（**不跟卡片 ×3**），在 3 倍高的行里垂直居中
+                    modifier = Modifier
+                        .width(delWidth)
+                        .height(rowKeyHeight)
+                        .align(Alignment.CenterVertically),
                     // ⌫ 是"按键"，跟网格里的键一样用完整胶囊；输入框卡片是"框"，留着比例圆角
                     shape = PillShape
                 )
@@ -582,18 +672,24 @@ fun FunctionEditorScreen(
                     focused = true,
                     error = error,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    onTap = { cursor1 = fn.src1.length },
+                    onTap = { },
+                    onCursorMove = { cursor1 = it },
                     shape = fieldShape
                 )
                 NameHintChip(
                     choices = nameChoices,
                     metrics = metrics,
-                    width = hintWidth
+                    height = rowKeyHeight,
+                    width = hintWidth,
+                    modifier = Modifier.align(Alignment.CenterVertically)
                 ) { showNamePicker = true }
                 BackspaceKey(
                     metrics = metrics,
                     onKey = ::applyKey,
-                    modifier = Modifier.width(delWidth).fillMaxHeight(),
+                    modifier = Modifier
+                        .width(delWidth)
+                        .height(rowKeyHeight)
+                        .align(Alignment.CenterVertically),
                     shape = PillShape
                 )
             }
@@ -634,7 +730,11 @@ fun FunctionEditorScreen(
                 gapFraction = GAP_FRACTION,
                 fieldCenterFraction = fieldCenterFraction,
                 rangeLabel = rangeLabel,
-                onSelectPage = { page = it },
+                onSelectPage = {
+                    page = it
+                    // 教程第 1 / 5 步：页签切换（状态机内部把页名映射成 page_* 信号）
+                    Tutorial.onPageSelected(it)
+                },
                 onCycleRange = {
                     val preset = nextRange(fn.tMin, fn.tMax, degrees)
                     onChange(fn.copy(tMin = preset.min, tMax = preset.max))
@@ -696,6 +796,11 @@ private fun NameHintChip(
     choices: List<NameChoice>,
     metrics: WatchMetrics,
     /**
+     * 高度。**由调用方给**，不跟输入框的 3 倍高度走（见 `rowKeyHeight` 的说明）：
+     * 它是一颗 chip，和 ⌫ 同高；`fillMaxHeight()` 会把它拉成一条竖着的白条。
+     */
+    height: Dp,
+    /**
      * 这颗 chip 的宽度。
      *
      * **由调用方给**（`keyBase * HINT_W_FRACTION`）而不是在这里写死 —— 这是用户那条
@@ -704,6 +809,7 @@ private fun NameHintChip(
      * 乘同一个比例。本组件自己**不碰**任何宽度基准，见 `keyWidthBase`。
      */
     width: Dp,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     if (choices.isEmpty()) return
@@ -721,9 +827,9 @@ private fun NameHintChip(
     val selected = bound != null
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .width(width)
-            .fillMaxHeight()
+            .height(height)
             .clip(PillShape)
             .background(if (selected) KeyPalette.accent else KeyPalette.normal)
             .clickable(onClick = onClick),

@@ -26,6 +26,8 @@ import com.functiondrawer.watch.ui.TOOLBAR_MENU_PANEL_SCALE_Y_FROM
 import com.functiondrawer.watch.ui.ToolbarKeySide
 import com.functiondrawer.watch.ui.WATCH_BASE_PX
 import com.functiondrawer.watch.ui.archiveHasContent
+import com.functiondrawer.watch.ui.crownPositionForSpeed
+import com.functiondrawer.watch.ui.crownSpeedForPosition
 import com.functiondrawer.watch.ui.gridStepForScreen
 import com.functiondrawer.watch.ui.gridTargetPxFor
 import com.functiondrawer.watch.ui.labelCornerAnchorPx
@@ -2207,8 +2209,8 @@ class PlotMetricsTest {
     }
 
     @Test
-    fun `设置行：写的顺序和读的顺序是同一份，段数就是 10`() {
-        assertEquals(10, SettingsFields.FIELD_COUNT)
+    fun `设置行：写的顺序和读的顺序是同一份，段数就是 19`() {
+        assertEquals(19, SettingsFields.FIELD_COUNT)
         // 全默认：逐段核对（这就是"顺序的唯一真相"那张表）
         val def = SettingsFields()
         assertSegment(def, index = 0, expect = "0")   // 坐标系序号（CARTESIAN）
@@ -2221,6 +2223,11 @@ class PlotMetricsTest {
         assertSegment(def, index = 7, expect = "1")   // 屏蔽系统手势（默认开）
         assertSegment(def, index = 8, expect = "0")   // 按键缩放栏（默认关）
         assertSegment(def, index = 9, expect = "1")   // "回到移动"提示（默认要弹一次）
+        assertSegment(def, index = 10, expect = "0")  // 夜间模式（默认关 = **黑底**）
+        assertSegment(def, index = 11, expect = "0")  // 表冠模式（默认 OPPO）
+        assertSegment(def, index = 12, expect = "10") // 表冠灵敏度（默认 1.0× = 10 个十分位）
+        assertSegment(def, index = 13, expect = "0")  // 主题风格（默认 Material）
+        assertSegment(def, index = 14, expect = "1")  // 模糊背景（默认开 = 和 3.28 一致）
         // 逐段翻转：只有那一段从 1 变 0（顺序、判据、编码三件事一起钉住）
         assertSegment(SettingsFields(showGrid = false), 1, "0")
         assertSegment(SettingsFields(showAxes = false), 2, "0")
@@ -2231,6 +2238,24 @@ class PlotMetricsTest {
         assertSegment(SettingsFields(blockSystemGestures = false), 7, "0")
         assertSegment(SettingsFields(showZoomBar = true), 8, "1")
         assertSegment(SettingsFields(confirmReturnToMove = false), 9, "0")
+        assertSegment(SettingsFields(dayMode = true), 10, "1")
+        assertSegment(SettingsFields(crownMode = 1), 11, "1")
+        assertSegment(SettingsFields(crownSpeedTenths = 25), 12, "25")
+        assertSegment(SettingsFields(themeStyle = 1), 13, "1")
+        assertSegment(SettingsFields(blurBackdrop = false), 14, "0")
+        // 第 16 段：原「存帧调试开关」已删除，恒写占位的 "0"（位次保留，避免老存档错位）
+        assertSegment(def, index = 15, expect = "0")
+        assertSegment(def, index = 16, expect = "100") // 模糊程度（默认 100% = 和 3.28 一致）
+        assertSegment(SettingsFields(blurStrengthPercent = 0), 16, "0")
+        assertSegment(SettingsFields(blurStrengthPercent = 42), 16, "42")
+        // 第 18 段：计算精度（0=3 位 / 1=8 位 / 2=16 位），默认 8 位
+        assertSegment(def, index = 17, expect = "1")
+        assertSegment(SettingsFields(precision = 0), 17, "0")
+        assertSegment(SettingsFields(precision = 2), 17, "2")
+        // 第 19 段：按钮下阴影强度（0~100），默认 10%
+        assertSegment(def, index = 18, expect = "10")
+        assertSegment(SettingsFields(keyShadowPercent = 0), 18, "0")
+        assertSegment(SettingsFields(keyShadowPercent = 55), 18, "55")
         assertSegment(SettingsFields(coordinateSystem = 2), 0, "2")
 
         // 往返：编码 → 解码 → 每一个字段都回来（"写进去读不回来"这类 bug 的正中央）
@@ -2244,7 +2269,15 @@ class PlotMetricsTest {
             degrees = true,
             blockSystemGestures = false,
             showZoomBar = true,
-            confirmReturnToMove = false
+            confirmReturnToMove = false,
+            dayMode = true,
+            crownMode = 1,
+            crownSpeedTenths = 37,
+            themeStyle = 1,
+            blurBackdrop = false,
+            blurStrengthPercent = 42,
+            precision = 2,
+            keyShadowPercent = 55
         )
         val back = SettingsFields.decode(all.encode(), coordinateSystemCount = 3)
         assertEquals(all.coordinateSystem, back.coordinateSystem)
@@ -2257,9 +2290,20 @@ class PlotMetricsTest {
         assertEquals(all.blockSystemGestures, back.blockSystemGestures)
         assertEquals(all.showZoomBar, back.showZoomBar)
         assertEquals(all.confirmReturnToMove, back.confirmReturnToMove)
+        // 本轮新增的三段：夜间模式的方向（true = 白底）在这一行被钉住，
+        // 以后谁再想"顺手反过来"就会在这里红。
+        assertEquals(all.dayMode, back.dayMode)
+        assertEquals(all.crownMode, back.crownMode)
+        assertEquals(all.crownSpeedTenths, back.crownSpeedTenths)
+        assertEquals("主题风格要能往返（0=Material / 1=液态玻璃）", all.themeStyle, back.themeStyle)
+        assertEquals("模糊背景要能往返（true=糊 / false=实色）", all.blurBackdrop, back.blurBackdrop)
+        assertEquals("模糊程度要能往返（0~100）", all.blurStrengthPercent, back.blurStrengthPercent)
+        assertEquals("计算精度要能往返（0=3 位 / 1=8 位 / 2=16 位）", all.precision, back.precision)
+        assertEquals("按钮下阴影强度要能往返（0~100）", all.keyShadowPercent, back.keyShadowPercent)
         // 另一头（全默认）也要往返：默认值本身不会被当成"缺段"
         assertSegment(SettingsFields.decode(def.encode(), 3), 3, "0")
         assertSegment(SettingsFields.decode(def.encode(), 3), 7, "1")
+        assertSegment(SettingsFields.decode(def.encode(), 3), 12, "10")
     }
 
     @Test
@@ -2277,20 +2321,54 @@ class PlotMetricsTest {
         assertTrue("缺第 8 段 → 屏蔽系统手势当作开（升级上来的老用户必须继续开着）", oldest.blockSystemGestures)
         assertFalse("缺第 9 段 → 不显示缩放栏", oldest.showZoomBar)
         assertTrue("缺第 10 段 → \"回到移动\"提示当作要弹一次", oldest.confirmReturnToMove)
+        // 最后三段（本轮新增）：老存档一条都没有 → 全部落回"改动前的观感"
+        assertFalse("缺第 11 段 → 白天模式关（= **夜间黑底**，也就是用户装完看到的默认）", oldest.dayMode)
+        assertEquals("缺第 12 段 → 表冠模式退回 OPPO", 0, oldest.crownMode)
+        assertEquals("缺第 13 段 → 灵敏度退回 1.0×", 10, oldest.crownSpeedTenths)
+        assertEquals("缺第 14 段 → 主题风格退回 Material", 0, oldest.themeStyle)
+        assertTrue(
+            "缺第 15 段 → 模糊背景当作**开**（上一版 3.28 所有主题都在糊，" +
+                "升级上来必须还是糊的，否则老用户会以为更新把效果弄丢了）",
+            oldest.blurBackdrop
+        )
+        // 第 16 段（原「存帧调试」）已删除：位次保留为恒定 "0" 占位，读取时忽略。
+        // 3.40：第 17 段是模糊程度，缺了必须当作 **100%** ——
+        // 上一版没有滑条，升级上来糊度要和之前一模一样。
+        assertEquals("缺第 17 段 → 模糊程度当作 100%", 100, oldest.blurStrengthPercent)
+        // 计算精度是后加的：老存档缺这一段 → 8 位（改动前的显示习惯）
+        assertEquals("缺第 18 段 → 计算精度当作 8 位", 1, oldest.precision)
+        // 按钮下阴影强度也是后加的：缺了就用用户点名的默认值 10%
+        assertEquals("缺第 19 段 → 按钮下阴影强度当作 10%", 10, oldest.keyShadowPercent)
 
         // 七段 / 九段的老存档（项目真实存在过的两代格式）同样照读
         val seven = SettingsFields.decode("0,1,1,0,0,0,1", 3)
         assertEquals("第 7 段 = 度制", true, seven.degrees)
         assertTrue("第 8 段缺失 → 默认开", seven.blockSystemGestures)
+        assertEquals("七段存档：表冠退回 OPPO", 0, seven.crownMode)
         val nine = SettingsFields.decode("0,1,1,0,0,0,1,0,1", 3)
         assertEquals("第 8 段 = 屏蔽系统手势（0）", false, nine.blockSystemGestures)
         assertEquals("第 9 段 = 缩放栏（1）", true, nine.showZoomBar)
         assertTrue("第 10 段缺失 → 默认 true", nine.confirmReturnToMove)
+        assertFalse("九段存档：白天模式仍是关（黑底）", nine.dayMode)
 
         // 后版本往末尾追加了两段（12 段）：前 10 段照读，多出来的忽略（前向兼容）
         val future = SettingsFields.decode("0,0,0,0,0,0,0,0,0,0,1,1", 3)
         assertFalse("第 2 段 = 网格（0）", future.showGrid)
         assertFalse("第 10 段 = 提示（0）", future.confirmReturnToMove)
+
+        // 13 段整行（本版本写出来的样子）也要能原样读回
+        val current = SettingsFields.decode("0,1,1,0,1,1,0,1,0,1,1,1,55", 3)
+        assertTrue("第 11 段 = 白天模式开（白底那套）", current.dayMode)
+        assertEquals("第 12 段 = 表冠模式 1（华为/三星）", 1, current.crownMode)
+        assertEquals("第 13 段 = 灵敏度 55（5.5×）", 55, current.crownSpeedTenths)
+        assertTrue("14 段存档：主题风格缺 → Material", current.themeStyle == 0)
+        assertTrue("14 段存档：模糊背景缺 → 仍当作开", current.blurBackdrop)
+
+        // 17 段整行：第 16 段是已删除的「存帧调试」占位（值被忽略），第 17 段是模糊程度
+        val full = SettingsFields.decode("0,1,1,0,1,1,0,1,0,1,0,0,10,1,0,1,1", 3)
+        assertEquals("第 14 段 = 主题风格 1（液态玻璃）", 1, full.themeStyle)
+        assertFalse("第 15 段 = 模糊背景 0（关 → 实色底）", full.blurBackdrop)
+        assertEquals("第 17 段 = 模糊程度 1（被夹到 0~100 内）", 1, full.blurStrengthPercent)
 
         // 坏行一律**整组**退回默认（不拿半截存档去改界面）：
         // 注意 "9,0,0,0" 这一条 —— 它的网格段是 0，如果没整组退回就会被读成"隐藏网格"，
@@ -2304,5 +2382,63 @@ class PlotMetricsTest {
         assertEquals(0, SettingsFields.decode("2,1,1,0", coordinateSystemCount = 0).coordinateSystem)
         // 合法的序号照读（本版本 3 种坐标系）
         assertEquals(2, SettingsFields.decode("2,0,0,0", 3).coordinateSystem)
+    }
+
+    @Test
+    fun `表冠灵敏度滑条：对数刻度，1倍速在正中间，两端是阈值且能来回`() {
+        // 三段定位：左端 0.1×、正中 1.0×、右端 10.0×
+        assertEquals(0.1f, crownSpeedForPosition(0f), 1e-4f)
+        assertEquals(1.0f, crownSpeedForPosition(0.5f), 1e-4f)
+        assertEquals(10f, crownSpeedForPosition(1f), 1e-3f)
+        // 越界的 t 被夹住（拖动时手指可能滑出轨道）
+        assertEquals(0.1f, crownSpeedForPosition(-3f), 1e-4f)
+        assertEquals(10f, crownSpeedForPosition(7f), 1e-3f)
+
+        // 对数刻度：每一"倍速"占的轨道一样宽 —— 0.1→1 和 1→10 各占一半
+        // （t=1/3 处是 10^(-1/3) ≈ 0.464，而不是 1/3，这正是"对数"与"线性"的分水岭）
+        assertEquals(0.4641589f, crownSpeedForPosition(1f / 3f), 1e-3f)
+        // 同样宽：speed(1/3) / speed(0) == speed(2/3) / speed(1/3)
+        val a = crownSpeedForPosition(1f / 3f) / crownSpeedForPosition(0f)
+        val b = crownSpeedForPosition(2f / 3f) / crownSpeedForPosition(1f / 3f)
+        assertEquals("相邻两段的倍率必须相等（这才是对数刻度）", a, b, 1e-3f)
+        assertEquals(0.5f, crownPositionForSpeed(1f), 1e-4f)
+
+        // 逆运算：位置 → 速度 → 位置，来回走一圈
+        for (t in listOf(0f, 0.1f, 0.25f, 0.5f, 0.75f, 0.9f, 1f)) {
+            assertEquals("t=$t 的逆运算", t, crownPositionForSpeed(crownSpeedForPosition(t)), 1e-4f)
+        }
+        // 速度本身超出范围时夹住（老存档里出现过 0 或 1000 也不能让滑条跑到轨道外）
+        assertEquals(0f, crownPositionForSpeed(0.01f), 1e-4f)
+        assertEquals(1f, crownPositionForSpeed(999f), 1e-4f)
+        assertEquals(0f, crownPositionForSpeed(0.1f), 1e-4f)
+        assertEquals(1f, crownPositionForSpeed(10f), 1e-4f)
+    }
+
+    /**
+     * 主题那一段的**方向**单独钉一条 —— 这是被返工过两次的地方，必须钉死。
+     *
+     * 用户 2026-10-17 最终口径：
+     * > "我原来做的那一套 ui 应该是夜间模式的。你要给白天模式的 ui 重新写一套配色，
+     * >  而不是只把背景变成白色。"
+     *
+     * 所以字段叫 `dayMode`（不是 `nightMode`）：
+     *   * `false`（默认）= **夜间** = 原来那套黑底 UI = 装完看到的样子；
+     *   * `true` = **白天** = 白纸 + 深饱和曲线 + 浅灰按键。
+     *
+     * 为什么名字要换而不是继续用 `nightMode` 取反：上一版 `nightMode=true` 表示白底，
+     * 于是设置页"夜间模式：开"显示白屏、`ThemeSettingsScreen` 里那句
+     * `copy(nightMode = !nightMode)` 读起来像"关掉夜间"实际在开白天。
+     * 名字和方向一致之后，代码里任何一处 `dayMode` 都能一眼读对。
+     *
+     * 存档第 11 段存的仍是同一个布尔：旧版 `nightMode=false` 是黑底、
+     * 新版 `dayMode=false` 也是黑底 —— **存值语义一致，零迁移**。
+     */
+    @Test
+    fun `白天模式默认是关，关就是夜间黑底`() {
+        assertFalse("默认必须是 false（= 夜间黑底）——方向反了用户装完看到的就是白屏", SettingsFields().dayMode)
+        assertEquals("默认值编码出来必须是 0", "0", SettingsFields().encode().split(",")[10])
+        // 打开才是白天那套
+        assertTrue(SettingsFields(dayMode = true).dayMode)
+        assertEquals("1", SettingsFields(dayMode = true).encode().split(",")[10])
     }
 }

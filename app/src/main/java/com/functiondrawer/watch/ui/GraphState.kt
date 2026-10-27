@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.functiondrawer.watch.engine.Calc
+import com.functiondrawer.watch.engine.CalcPrecision
 import com.functiondrawer.watch.engine.CallableSet
 import com.functiondrawer.watch.engine.Complex
 import com.functiondrawer.watch.engine.Expression
@@ -36,6 +38,7 @@ import com.functiondrawer.watch.engine.parallel
 import com.functiondrawer.watch.engine.perpendicular
 import com.functiondrawer.watch.engine.perpendicularBisector
 import com.functiondrawer.watch.engine.polygonArea
+import com.functiondrawer.watch.engine.projectionParam
 import com.functiondrawer.watch.engine.rayOf
 import com.functiondrawer.watch.engine.reflect
 import com.functiondrawer.watch.engine.reflectThrough
@@ -178,8 +181,173 @@ data class WatchSettings(
      * "点这里回到移动"正好被本轮删掉了，缺了这次说明就少了一条信息），
      * 而代价只是一次可以勾掉的框。
      */
-    val confirmReturnToMove: Boolean = true
+    val confirmReturnToMove: Boolean = true,
+    /**
+     * **白天模式**开关（2026-10-17 新增，本轮修正了方向）。
+     *
+     * 字段名是 `dayMode`（不是 `nightMode`）—— 这是关键：**名字和方向必须一致**。
+     *
+     *   * **false（默认）= 夜间** —— 也就是这个 App 原来那套黑底 UI。
+     *     用户原话："**我原来做的那一套 ui 应该是夜间模式的**"，
+     *     所以纯黑画布 + 粉彩曲线 + 深灰按键**就是**夜间主题，不是"默认主题"。
+     *   * **true = 白天模式** —— 白纸画布 + 深饱和曲线 + 浅灰按键，
+     *     一整套重新配过的颜色（`WatchPaletteDay` / `CurvePaletteDay` / `DayKeyColors`），
+     *     不是"把背景刷白"。
+     *
+     * 设置页那一行仍然叫「**夜间模式**」（用户就是这么叫的），
+     * 显示的是 `!dayMode`：打开 = 夜间 = 黑底。点击翻转 `dayMode`。
+     *
+     * ## 为什么改字段名而不是给 `nightMode` 取反
+     *
+     * 上一版字段叫 `nightMode` 但 `true = 白底`，于是"夜间模式：开"显示白屏 ——
+     * 用户一句"反了"就是这个。更麻烦的是 `ThemeSettingsScreen` 里那句
+     * `copy(nightMode = !nightMode)` 读起来像"关掉夜间"，实际在开白天。
+     * 字段名、主题参数、存档段名三处统一成 `dayMode` 之后，
+     * 代码里任何一处 `dayMode` 都能一眼读对。
+     *
+     * ## 存档兼容：零迁移
+     *
+     * 存档第 11 段存的是这个布尔值本身（`0`/`1`）。旧版 `nightMode=false` 表示黑底，
+     * 新版 `dayMode=false` 也表示黑底 —— **存值语义完全一致**，只是换了个名字。
+     * 所以老存档读出来该黑的还是黑的，不需要任何迁移代码。
+     *
+     * 切换**即时生效**（点一下当场换，不等退出设置），并随存档持久化。
+     */
+    val dayMode: Boolean = false,
+    /**
+     * **主题风格**（2026-10-17 新增）。
+     *
+     * 用户原话："设置的主题设置里面的夜间模式前面加一条主题设置，
+     * 可以切换 Material（现在这个风格）和液态玻璃。"
+     *
+     * [ThemeStyle.MATERIAL] = 现在这套（纯色卡片 + 扁平按键）；
+     * [ThemeStyle.LIQUID_GLASS] = 抽屉/卡片换成磨砂玻璃：背后的图像被模糊、
+     * 盖一层半透明底、顶部一条高光边。
+     *
+     * 它和「夜间模式」是**正交**的两件事：一个管明暗、一个管质感，
+     * 所以是两个独立字段，可以组合（白天 + 玻璃 / 夜间 + 玻璃）。
+     */
+    val themeStyle: ThemeStyle = ThemeStyle.MATERIAL,
+    /**
+     * **模糊背景**开关（2026-10-18 新增）。
+     *
+     * 用户原话："在主题设置里面加一个模糊背景的开关吧，这样让 material 主题也能使用
+     * 模糊背景，让毛玻璃主题也能不使用模糊背景。注意分开写模糊背景和不模糊背景的效果，
+     * 不模糊背景的效果就是刚开始没做模糊效果的时候的抽屉效果。"
+     *
+     * 所以它和 [themeStyle] 是**正交**的两件事，四种组合都成立：
+     *
+     * | themeStyle | blurBackdrop | 抽屉里看到的 |
+     * |---|---|---|
+     * | MATERIAL | false | 纯不透明底色（最早期那个抽屉，什么都不透） |
+     * | MATERIAL | true  | 背后函数图的模糊版（本轮新增的玩法） |
+     * | LIQUID_GLASS | true | 同样的模糊版 + 玻璃卡片（玻璃主题一直的观感） |
+     * | LIQUID_GLASS | false | 纯不透明底色 + 玻璃卡片（玻璃材质在实色底上） |
+     *
+     * ⚠️ 它不是"玻璃的一个子开关"：玻璃主题的本体是**卡片材质**
+     * （半透明面、更亮的分界线、行内高光），和背景糊不糊没关系 ——
+     * 这也是为什么两者必须是两个字段，而不是一个三态枚举。
+     *
+     * 默认值 `true`：上一版（3.28）所有主题共用一张静态模糊图，升级上来
+     * 手上就是开着的样子，零感知。Material 主题的老用户如果觉得太花，
+     * 去主题设置里关掉即可。
+     */
+    val blurBackdrop: Boolean = true,
+    /**
+     * **模糊程度**（0f~1f，3.40 新增；界面显示 0%~100%）。
+     *
+     * 用户原话："在模糊背景的设置条下面加个调表冠灵敏度同款的滑动设置条，
+     * 内容是模糊程度，调整从 0% 到 100%。"
+     *
+     * 它只影响**半径**，不影响开关：[blurBackdrop] 关着时这一项不生效。
+     * 换算见 `BackdropImage.blurRadiusDpFor(strength)` —— 0% 时半径 0
+     * （等于不糊、只剩压暗），100% 时被 `ScriptIntrinsicBlur` 的 25 上限卡住
+     * （库里能给的最糊）。
+     *
+     * ## 默认值
+     *
+     * 3.42 曾定成 70%，本轮按用户要求改成 **30%**：
+     * "把初次打开软件里模糊程度的默认值改成 30%"。
+     * 只影响**新装**的默认值；已经存过设置的设备沿用存档里的值
+     * （升级用户不会因为这一行突然变糊或变清）。
+     */
+    val blurStrength: Float = 0.3f,
+    /**
+     * **按钮下阴影强度**（0~1，默认 10%）。
+     *
+     * 用户原话："把初次打开软件里模糊程度的默认值改成 30%，按钮下阴影强度默认值改成 10%。"
+     *
+     * 它乘在液态玻璃按键的投影 alpha 上（见 `Common.kt` 的 `glassElevation`）：
+     * 0% = 完全没有投影，100% = 明显浮起。只影响**观感**，不参与任何布局与交互。
+     */
+    val keyShadowStrength: Float = 0.1f,
+    /**
+     * **表冠工作机制**（2026-10-17 新增）。
+     *
+     * 不同厂家的手表把"表冠旋转"报成不同的输入事件，一套代码吃不下两种：
+     * OPPO 系会在普通的 `MotionEvent` 里带滚轮轴，而华为/三星走
+     * `ACTION_SCROLL` + `SOURCE_ROTARY_ENCODER`。用错了就是"表冠完全没反应"。
+     * 具体差异见 [CrownMode] 的说明。
+     *
+     * 默认 [CrownMode.OPPO]（本 App 一直用的那套），华为/三星用户去设置里切一下。
+     */
+    val crownMode: CrownMode = CrownMode.OPPO,
+    /**
+     * **表冠灵敏度**（倍速）：1.0 = 原来的手感。
+     *
+     * 用户原话："在这个设置条下面放灵敏度设置，用滑动条控制，现在默认速度是 1.0，
+     * 最低到 0.1，最高到 10.0。"
+     *
+     * 它乘在表冠给的原始滚动量上（见 `MainActivity` 的 `rotaryEvents`）。
+     */
+    val crownSpeed: Float = 1.0f,
+    /**
+     * **计算精度**（3 / 8 / 16 位小数，默认 8 位）。
+     *
+     * 它决定三件事：小于精度阈值的数按 0 处理、缩放的放大上限、
+     * 以及坐标轴/数值显示的小数位数 —— 详见 `engine/CalcPrecision.kt`。
+     * 存档里追加在末尾（老存档缺这一段 → 8 位）。
+     */
+    val precision: CalcPrecision = CalcPrecision.P8
 )
+
+/**
+ * 表冠的两种事件来源（用户要求"表冠要能选 OPPO / 华为三星"）。
+ *
+ * 为什么必须让用户自己选、而不是自动探测：
+ * 两种事件在不同厂家的表上**都可能出现、也可能都不出现** —— 自动探测要么会
+ * 把同一次旋转算两遍（表格滚两次），要么在某个厂家固件上永远探不到（表冠失灵）。
+ * 让用户手动选一次、选错再换一个，比猜稳。
+ *
+ *   * [OPPO]：旋转走普通 `MotionEvent` 的滚轮轴（`AXIS_SCROLL` / `AXIS_VSCROLL`），
+ *     事件本身没有 `SOURCE_ROTARY_ENCODER` 标记。这是本 App 一直以来的接法。
+ *   * [HUAWEI_SAMSUNG]：旋转走 `ACTION_SCROLL`，且 `source` 带
+ *     `SOURCE_ROTARY_ENCODER` 位。这一支要按 "一格 = 固定步进" 理解，
+ *     原始值往往只有 ±1，直接乘灵敏度容易"转半天不动"，所以这一支做了放大。
+ */
+/**
+ * 主题风格（见 `WatchSettings.themeStyle`）。
+ *
+ * 只有两个值，而且**不叫"经典/新版"**：用户说的是"Material（现在这个风格）和液态玻璃"，
+ * 那就用这两个词，界面上直接显示，不另起名字。
+ */
+enum class ThemeStyle(val label: String) {
+    /** 现在这套：纯色卡片、扁平按键、无模糊。 */
+    MATERIAL("Material"),
+
+    /** 磨砂玻璃：背后图像模糊 + 半透明底 + 顶部高光边。 */
+    LIQUID_GLASS("毛玻璃");
+
+    fun next(): ThemeStyle = if (this == MATERIAL) LIQUID_GLASS else MATERIAL
+}
+
+enum class CrownMode(val label: String) {
+    OPPO("OPPO"),
+    HUAWEI_SAMSUNG("华为 / 三星");
+
+    /** 循环到下一个取值（设置行点一下切一个）。 */
+    fun next(): CrownMode = entries[(ordinal + 1) % entries.size]
+}
 
 // ---------------------------------------------------------------------------
 // 「这条设置在本机能不能用」的统一规则（依赖系统版本的设置只有这一套写法）
@@ -321,8 +489,36 @@ sealed interface Route {
      */
     data class SliderProperties(val id: Long) : Route
 
-    /** 设置 */
+    /**
+     * 「函数设置」（**短按 ⚙** 打开）。
+     *
+     * 用户本轮原话："短按设置只打开函数设置界面。" —— 这一屏只剩函数相关的那几项
+     * （坐标系 / 网格 / 坐标轴 / 坐标数字 / 函数示例 / 屏蔽系统手势 / 按键缩放栏）。
+     * 其余的（表冠 / 触摸 / 主题 / 应用信息）搬到长按 ⚙ 的 [MoreSettings] 里。
+     */
     data object Settings : Route
+
+    /**
+     * 「更多菜单」（**长按 ⚙** 打开）：四个入口行，点进去是各自的子页。
+     *
+     * 用户本轮原话："把那些设置放到长按设置键的更多菜单里，分四个大块，点进去再设置。"
+     *
+     * 四个子页见 [CrownSettings] / [TouchSettings] / [ThemeSettings] / [About]。
+     * 它们都是**临时屏**（进出不记来路，和 [Settings] / [Saves] 同构）。
+     */
+    data object MoreSettings : Route
+
+    /** 「表冠适配」子页（更多菜单第一个大块）：表冠模式 + 灵敏度滑条。 */
+    data object CrownSettings : Route
+
+    /** 「计算设置」子页（更多菜单第一块下面）：调整计算精度（3 / 8 / 16 位小数）。 */
+    data object CalcSettings : Route
+
+    /** 「触摸设置」子页（更多菜单第二个大块）：屏蔽系统手势 + 按键缩放栏。 */
+    data object TouchSettings : Route
+
+    /** 「主题设置」子页（更多菜单第三个大块）：夜间模式（黑底 / 日间白底）。 */
+    data object ThemeSettings : Route
 
     /**
      * 「功能界面」（用户需求 #9）。
@@ -366,6 +562,14 @@ sealed interface Route {
      * "看过一次应用信息 → 回列表 → 进图像界面 → 上滑"掉回应用信息页。
      */
     data object About : Route
+
+    /**
+     * 「开发者模式」子页（更多菜单里**只有开了开发者模式才出现**的入口）。
+     *
+     * 三项：关掉开发者模式、回到初始界面（重看欢迎流程）、恢复默认设置。
+     * 和 [CrownSettings] / [TouchSettings] 一样是临时屏：进来办完事回 [MoreSettings]。
+     */
+    data object Developer : Route
 }
 
 /**
@@ -380,7 +584,9 @@ class GraphState {
     var viewport by mutableStateOf(Viewport(0f, 0f))
         private set
 
-    var functions by mutableStateOf(listOf(defaultFunction()))
+    // 启动时不再自动创建正弦函数（用户要求删掉这条机制）：
+    // 全新安装看到的是一张空列表，第一条函数由用户自己点 + 新建。
+    var functions by mutableStateOf(listOf<PlotFunction>())
         private set
 
     /**
@@ -446,6 +652,20 @@ class GraphState {
         // 老存档里可能是 true（那台设备版本够、或这份存档是从别的设备拷来的）：
         // applySettings 会在本机做不到时把它压成 false，随后的防抖存档就会写回 false。
         applySettings(saved)
+    }
+
+    /**
+     * 把当前缩放夹回**新精度**允许的上限。
+     *
+     * 用户从 16 位切到 3 位时，原来的视野可能已经放大到 1e-10 ——
+     * 此时不该继续停在"比 3 位精度还细"的尺度上，直接按新上限纠正（放大不再继续）。
+     */
+    fun clampViewportToPrecision() {
+        val cur = viewport
+        val min = Calc.precision.minUnitsPerPixel
+        if (cur.widthPx <= 1f || !cur.unitsPerPixel.isFinite()) return
+        if (cur.unitsPerPixel >= min) return
+        viewport = cur.copy(unitsPerPixel = min)
     }
 
     // ---- 清空全部函数（功能界面长按 🗑 触发）----
@@ -1001,8 +1221,8 @@ class GraphState {
      * `Store.load(context)?.let { … }` 曾经也把整份存档丢掉了 —— 修完 `Store.load`
      * 之后，这一句仍然是"设置回来了、视野却被跳过"的最后一个缺口。
      *
-     * 所以现在：**空表时只恢复视野**，不动函数列表（内存里那份还是新建时的默认示例，
-     * 行为与改动前一致 —— 用户不会因为"存档是空的"而丢掉 App 的初始示例）。
+     * 所以现在：**空表时只恢复视野**，不动函数列表（内存里那份就是空列表，
+     * 第一条函数由用户自己新建 —— 启动时不再自动塞一条正弦函数）。
      *
      * 视野的合法性再判一次：`unitsPerPixel` 坏掉时宁可继续用默认视野，
      * 也不能把 NaN 塞进 `Viewport`（那会让整块画布算不出任何像素）。
@@ -1019,8 +1239,17 @@ class GraphState {
             this.selectedId =
                 if (functions.any { it.id == selectedId }) selectedId else functions.first().id
             idSeq = functions.maxOf { it.id }
+            // 这些函数**不是刚加的**：和打开文件同一条尺子（见 `loadFileState`），
+            // 把"已揭示"直接对上新列表，冷启动时 `consumeReveal` 就返回空集。
+            //
+            // 用户反馈 6：冷启动列表里有函数、模糊背景里却没有曲线 ——
+            // 原因之一就是这里没对上新列表，冷启动被当成"全部都是新函数"，
+            // 曲线在背景抓帧的那一刻还停在揭示动画的 0 进度上（等于没画）。
+            revealedIds = functions.map { it.id }.toSet()
         }
-        if (unitsPerPixel.isFinite() && unitsPerPixel > Viewport.MIN_UNITS_PER_PIXEL) {
+        if (unitsPerPixel.isFinite() && unitsPerPixel > 0.0) {
+            // 合法值直接收下（Store.load 已经按存档里的精度夹过一次了；
+            // 这里不再用 Calc.precision 夹，避免它此刻还是默认的 8 位而误伤 16 位存档）。
             viewport = Viewport(0f, 0f, centerX, centerY, unitsPerPixel)
             pendingRestore = true
         }
@@ -1309,6 +1538,10 @@ class GraphState {
     fun toggleSliderPlaying(id: Long) {
         val target = sliders.firstOrNull { it.id == id } ?: return
         val willPlay = !target.playing
+        // 第一次按下播放键：弹一次「回到函数图像界面才开始播放」的提示。
+        // 判据用 `AppPrefs.sliderPlayHintShown`（装一次只弹一次），而不是
+        // 存档里的设置 —— 它是纯 UI 提示，不属于某份函数文件。
+        if (willPlay && !AppPrefs.sliderPlayHintShown) sliderPlayHint = true
         sliders = sliders.map {
             when {
                 it.id == id -> it.copy(playing = willPlay)
@@ -1461,7 +1694,11 @@ class GraphState {
      *   * 新建一个函数 → 只有它自己从左到右画出来，原有的函数**不重画** ✓
      *   * 编辑已有函数（id 没变）→ 返回空集合，不播 ✓
      *   * 单纯进出图像界面、拖动缩放 → 空集合 ✓
-     * 冷启动时把所有函数都算作"新的"（第一眼看到的就是画出来的过程）。
+     *
+     * 冷启动时 [restore] 已经把存档里的函数记成"已揭示"了（用户反馈 6：
+     * 背景要能立刻画出这些曲线，不能停在揭示动画的 0 进度上），
+     * 所以那种情况这里返回空集；只有进程里第一次调用、又没经过 [restore] 的
+     * 入口才会把所有函数都当成"新的"。
      */
     fun consumeReveal(current: List<PlotFunction>): Set<Long> {
         val ids = current.map { it.id }.toSet()
@@ -1492,6 +1729,23 @@ class GraphState {
 
     fun dismissToast() {
         toast = null
+    }
+
+    // ---- 滑动条播放提示 ----
+
+    /**
+     * 「回到函数图像界面才开始播放」这一句提示要不要显示。
+     *
+     * 只由 [toggleSliderPlaying] 在**第一次**按播放键时置 true；
+     * 关掉它（[dismissSliderPlayHint]）会同时落盘 [AppPrefs.setSliderPlayHintShown]，
+     * 之后永不再弹。放在这里而不是 `GraphScreen` 的局部 state，是因为
+     * 播放键在抽屉里、对话框在抽屉之上，两边都要读同一个值。
+     */
+    var sliderPlayHint by mutableStateOf(false)
+        private set
+
+    fun dismissSliderPlayHint() {
+        sliderPlayHint = false
     }
 
     // ===================================================================================
@@ -1897,6 +2151,16 @@ class GraphState {
         private set
 
     /**
+     * 「圆（半径·圆心）」已经点好的圆心（`null` = 半径输入面板没开）。
+     *
+     * 用户要求点完圆心**直接弹键盘输入半径**（"你直接调用函数创建界面的键盘吧"），
+     * 所以这里只存"圆心"这一件事；输入框里的文本归 `RadiusInputPanel` 自己管，
+     * 按下 ✓ 时由 [confirmRadiusInput] 校验表达式并建圆。
+     */
+    var radiusInputCenter by mutableStateOf<GPoint?>(null)
+        private set
+
+    /**
      * 上一次**常驻屏**是哪一屏 —— 图像界面底部上滑就回那里。
      *
      * 用户要求："从第二屏滑到函数图像界面之后，从函数图像界面底部上滑应该回到第二屏。"
@@ -1968,6 +2232,15 @@ class GraphState {
             // 它是"长按列表那颗 ⚙ 进去看一眼"的叶子屏（返回键落**列表**），
             // 记成来路会出现"看过一次应用信息 → 回列表 → 进图像界面 → 上滑"掉回它。
             Route.About,
+            // 更多菜单与它的四个子页（本轮新增）同样都是临时屏：进出都不记来路，
+            // 和 `Settings` 逐字同一个道理（"看过一次 → 回列表 → 上滑"不该掉回去）。
+            Route.MoreSettings,
+            Route.CrownSettings,
+            Route.CalcSettings,
+            Route.TouchSettings,
+            Route.ThemeSettings,
+            // 开发者模式子页同样不记来路（和上面几屏一个道理）。
+            Route.Developer,
             Route.Graph -> lastNonGraphRoute
         }
     }
@@ -2147,10 +2420,12 @@ class GraphState {
             st.objects.maxOfOrNull { it.id } ?: 0L
         )
 
-        // 视口：文件里的缩放必须是合法值，否则沿用当前的（别把用户丢进一个 NaN 视野）
+        // 视口：文件里的缩放必须是合法值，否则沿用当前的（别把用户丢进一个 NaN 视野）；
+        // 低于当前精度的下限则按当前精度夹回去（放大上限跟着精度走）。
         val cur = viewport
         val upp = st.viewport.unitsPerPixel
-            .takeIf { it.isFinite() && it > Viewport.MIN_UNITS_PER_PIXEL }
+            .takeIf { it.isFinite() && it > 0.0 }
+            ?.coerceIn(Calc.precision.minUnitsPerPixel, Viewport.MAX_UNITS_PER_PIXEL)
             ?: cur.unitsPerPixel
         if (cur.widthPx > 1f) {
             viewport = Viewport(cur.widthPx, cur.heightPx, st.viewport.centerX, st.viewport.centerY, upp)
@@ -2273,7 +2548,10 @@ class GraphState {
         // 它是**本机的一次性说明**（"我在这里已经被告知过"），跟着文件跑到另一台设备上
         // 反而会替那台设备决定"别再提示"，所以同样**保留当前值**。
         // `FunctionFileFormat.FileSettings` 本轮不在可改范围内，所以文件里不存它。
-        confirmReturnToMove = settings.confirmReturnToMove
+        confirmReturnToMove = settings.confirmReturnToMove,
+        // 计算精度同属"暂不随文件走"：它是本机的显示/计算偏好，
+        // 文件格式里没有这一段，打开文件时保留用户当前的选择（默认 8 位）。
+        precision = settings.precision
     )
 
     /** 真·移动模式（只有它是"拖动 = 平移图像"）。 */
@@ -2374,6 +2652,82 @@ class GraphState {
         // 回移动模式时把两张卡收掉：用户按"回到移动"是想拖图/看全图，
         // 卡片（浮在上三分之一）留着会挡视线。想再看点一下对象就是。
         clearTappedCards()
+    }
+
+    // ---- 半径输入面板（「圆（半径·圆心）」用）----
+
+    /** 关掉半径输入面板（取消 = 不建圆，工具留在"再点一个圆心"）。 */
+    fun cancelRadiusInput() {
+        radiusInputCenter = null
+        restartToolFlow(activeTool)
+    }
+
+    /**
+     * 半径输入面板按下 ✓：校验表达式、建圆、关面板。
+     *
+     * 用户原话："如果识别到无法创建就不创建并弹出 toast 提示'请输入正确半径'。"
+     * 所以**不合法时面板不关**（用户可以接着改），只弹那一句 —— 静悄悄关掉再什么都不说
+     * 是最糟的结果。合法时建一条隐函数曲线（默认工具线的黑/白），关面板回到取点。
+     *
+     * 校验口径：半径里只能出现数字、滑动条参数（`a`~`d`）、常量和可调用函数；
+     * 采样变量（`x`/`y`/`t`）一律不认 —— 那不是"一个半径值"。
+     * 同时按**当前参数值**求一次数值，负数/0/无穷大同样算不合法（画出来是一个点或空）。
+     */
+    fun confirmRadiusInput(source: String) {
+        val center = radiusInputCenter ?: return
+        val expr = source.trim()
+        val value = if (expr.isEmpty()) {
+            null
+        } else {
+            runCatching {
+                Expression.compile(
+                    expr,
+                    variables = emptyList(),
+                    parameters = parameters(),
+                    callables = callables()
+                ).eval()
+            }.getOrNull()
+        }
+        if (value == null || !value.isFinite() || value <= 0.0) {
+            showToast("请输入正确半径")
+            return
+        }
+        val eq = circleRadiusExpressionEquation(center, expr)
+        val name = addToolCurve(PlotMode.IMPLICIT, eq)
+        radiusInputCenter = null
+        restartToolFlow(activeTool)
+        showToast("已画出圆 $name：$eq")
+    }
+
+    /**
+     * 工具建出来的一条曲线：**默认颜色是工具线的黑（夜间白）**，其余照常。
+     *
+     * 为什么不用 `addFunction` 自己给的 `functions.size % 6`：那是"函数"的配色，
+     * 而用户明确要求"功能界面所有能绘制出线（包括直线和曲线）的功能绘制出的线
+     * 默认颜色都是黑色（夜间白）"—— 曲线和自绘的线同色，才一眼看得出"这些是画出来的"。
+     *
+     * [tMin] / [tMax] / [degrees] 是给圆弧那条参数方程用的（量程是现算的弧度区间，
+     * 而且**必须**按弧度解释 `cos t`，否则全局度制是 DEG 时圆弧会被算成一小段）。
+     */
+    private fun addToolCurve(
+        mode: PlotMode,
+        src1: String,
+        src2: String = "",
+        tMin: Double? = null,
+        tMax: Double? = null,
+        degrees: Boolean? = null
+    ): String {
+        val id = addFunction(mode, src1, src2)
+        val created = functions.firstOrNull { it.id == id } ?: return ""
+        updateFunctionNoUndo(
+            created.copy(
+                colorIndex = TOOL_CURVE_COLOR_INDEX,
+                tMin = tMin ?: created.tMin,
+                tMax = tMax ?: created.tMax,
+                degrees = degrees ?: created.degrees
+            )
+        )
+        return created.name
     }
 
     // ---- 2. 对象的增删改 ----
@@ -2879,21 +3233,58 @@ class GraphState {
      *
      * 用的是引擎的 `nearestOnCurve`（屏幕空间最近点，含像素距离），
      * 所以阈值和特征点同一套（[snapRadiusPx]），手感一致。
+     *
+     * ## 自绘曲线也要吸（用户要求）
+     *
+     * 用户原话："描点只能吸附函数曲线不能吸附自绘曲线，请你添加可以吸附自绘曲线。"
+     * 自绘曲线就是工具画出来的直线 / 线段 / 射线（[GraphLineObject]）——
+     * 它们的世界坐标只有两个锚点，最近点用投影算（和 [lineObjectAt] 同一套
+     * `projectionParam` + `distanceToShape`），再按像素距离和函数曲线一起比。
+     *
+     * [onlyOnCurve] 非空时**不吸自绘曲线**：那条路径是"切线只能选某条函数上的点"，
+     * 跑到直线上就不是用户要的了。
      */
-    private fun nearestOnAnyCurve(px: Float, py: Float, onlyOnCurve: Long?): GPoint? {
+    private fun nearestOnAnyCurve(
+        px: Float,
+        py: Float,
+        onlyOnCurve: Long?,
+        limitPx: Double = snapRadiusPx()
+    ): GPoint? {
         val vp = plot.viewport ?: return null
         if (vp.widthPx <= 1f) return null
-        val limit = snapRadiusPx()
+        val limit = limitPx
         val picked = functions.filter { it.visible }
             .filter { onlyOnCurve == null || it.id == onlyOnCurve }
-        if (picked.isEmpty()) return null
         var best: GPoint? = null
         var bestDist = Double.MAX_VALUE
-        for (fn in picked) {
-            // 一条函数可能被采样成好几段（间断处会切开），每段都要试
-            for (curve in plot.curves) {
-                if (curve.functionId != fn.id) continue
-                val (point, dist) = nearestOnCurve(curve, px, py, vp) ?: continue
+        if (picked.isNotEmpty()) {
+            for (fn in picked) {
+                // 一条函数可能被采样成好几段（间断处会切开），每段都要试
+                for (curve in plot.curves) {
+                    if (curve.functionId != fn.id) continue
+                    val (point, dist) = nearestOnCurve(curve, px, py, vp) ?: continue
+                    if (dist <= limit && dist < bestDist) {
+                        best = point
+                        bestDist = dist
+                    }
+                }
+            }
+        }
+
+        // 自绘曲线：投影到直线 / 线段 / 射线上取最近点（线段夹 0~1、射线夹 ≥0）。
+        if (onlyOnCurve == null) {
+            val finger = GPoint(vp.toWorldX(px.toDouble()), vp.toWorldY(py.toDouble()))
+            for (o in objects) {
+                if (o !is GraphLineObject || !o.visible || o.role == FRAGMENT_ROLE) continue
+                if (o.line.isDegenerate) continue
+                val raw = projectionParam(finger, o.line)
+                val t = when (o.line.kind) {
+                    GLineKind.LINE -> raw
+                    GLineKind.SEGMENT -> raw.coerceIn(0.0, 1.0)
+                    GLineKind.RAY -> raw.coerceAtLeast(0.0)
+                }
+                val point = o.line.pointAt(t)
+                val dist = screenDistance(vp, px.toDouble(), py.toDouble(), point)
                 if (dist <= limit && dist < bestDist) {
                     best = point
                     bestDist = dist
@@ -2975,7 +3366,8 @@ class GraphState {
                 name = nextObjectName(ObjectKind.POINT),
                 point = point,
                 kind = kind,
-                colorIndex = nextObjectColor()
+                // 描点默认**蓝色**（用户要求，见 POINT_DEFAULT_COLOR_INDEX）
+                colorIndex = POINT_DEFAULT_COLOR_INDEX
             )
         )
     }
@@ -2983,6 +3375,68 @@ class GraphState {
     fun cancelPendingPoint() {
         pendingPoint = null
         pendingKind = null
+    }
+
+    // ---- 4b. 拖动已经放下的点（用户要求） ----
+
+    /**
+     * 用户原话："实心的点在点击之后可以拖动来改变它的位置，或者长按它直接拖动；
+     * 在函数曲线或者自绘曲线上描出来的实心的点也可以拖动，如果函数曲线或者自绘曲线移动，
+     * 这个点也跟着移动，确保这个点一定在之前描的曲线上。"
+     *
+     * 界面那一侧（`GraphScreen` 的手势 1b）负责判定"这一串要不要交给拖点"：
+     * 按在点上、而且（已经选中 **或** 按住到长按）才开始，见那边的说明。
+     * 这里只管三件事：抓点偏移、约束、写回对象。
+     */
+    var draggingPointId by mutableStateOf<Long?>(null)
+        private set
+
+    /** 手指按下处与点中心的**世界坐标**差：拖动时保持它不变，点不会瞬间跳到指尖。 */
+    private var dragGrabDx = 0.0
+    private var dragGrabDy = 0.0
+
+    /** 被拖的点是不是"吸附来的点"（[SnapKind.POINT] 以外的都算）—— 它们拖动时不许离开曲线。 */
+    private var dragConstrained = false
+
+    /** 按下的位置有没有压在一个可拖的点上（有就返回它的 id），命中口径和点选一致。 */
+    fun draggablePointAt(px: Float, py: Float): Long? = pointObjectAt(px, py)?.id
+
+    /** 开始拖 [id]（世界坐标偏移按 [px]/[py] 这一点算，见 [dragGrabDx]）。 */
+    fun beginPointDrag(id: Long, px: Float, py: Float) {
+        val o = objects.firstOrNull { it.id == id } as? GraphPointObject ?: return
+        // 一次拖动 = 一步撤销：tag 让"同一次拖动的每一帧"不会各压一步
+        // （和 [setObjectColor] 同一条规矩）。
+        pushUndo("移动 ${o.name}", tag = "pointdrag:$id")
+        draggingPointId = id
+        dragGrabDx = o.point.x - viewport.toWorldX(px.toDouble())
+        dragGrabDy = o.point.y - viewport.toWorldY(py.toDouble())
+        // 吸附来的点（曲线上的点 / 交点 / 零点 / 极值点）拖动时**一直留在曲线上**：
+        // 用户要求"确保这个点一定在之前描的曲线上"。自由描的点（POINT）随便拖。
+        dragConstrained = o.kind != SnapKind.POINT
+    }
+
+    /** 跟手：把正在拖的点挪到手指对应的位置（受约束的点只挪到最近的曲线/直线上）。 */
+    fun movePointDrag(px: Float, py: Float) {
+        val id = draggingPointId ?: return
+        val o = objects.firstOrNull { it.id == id } as? GraphPointObject ?: return
+        val next = if (dragConstrained) {
+            // 约束点：**按手指位置**找最近的曲线/自绘线。半径放宽到 3 倍吸附半径 ——
+            // 拖动时手指不会一直精准地压在线上，用吸附那一档会觉得"点跟不上手"。
+            nearestOnAnyCurve(px, py, null, snapRadiusPx() * 3.0) ?: o.point
+        } else {
+            GPoint(
+                viewport.toWorldX(px.toDouble()) + dragGrabDx,
+                viewport.toWorldY(py.toDouble()) + dragGrabDy
+            )
+        }
+        if (next == o.point) return
+        updateObject(o.copy(point = next))
+    }
+
+    /** 松手（或手势被取消）：拖点结束，对象已经落在最后一次 [movePointDrag] 的位置上。 */
+    fun endPointDrag() {
+        draggingPointId = null
+        dragConstrained = false
     }
 
     // ---- 5. 对象命中测试（变换类工具要"点一个对象"） ----
@@ -3135,6 +3589,23 @@ class GraphState {
                 restartToolFlow(tool)
                 return "${tool.label}：这一轮已经出过结果了，接着点就是新的一轮"
             }
+        // 「圆心·半径」的第 2 步（stepIndex == 1）还认一条**线段**：用它的长度当半径，
+        // 这一轮直接出圆。状态机那三步都只声明了"点"，所以这条捷径在这里特判 ——
+        // 和「角度」第 0 步同一个思路（那一步在状态机里就是双选的 altBranch）。
+        if (tool == FunctionTool.CIRCLE_CENTER_RADIUS && flow.stepIndex == 1) {
+            val center = flow.points.firstOrNull()
+            val segment = lineObjectAt(px, py)?.takeIf { it.line.kind == GLineKind.SEGMENT }
+            if (center != null && segment != null) {
+                val eq = circleEquation(center, segment.line.length)
+                restartToolFlow(tool)
+                return if (eq == null) {
+                    "圆心·半径：这条线段长度是 0，圆画不出来（已重新开始）"
+                } else {
+                    "已画出圆 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                }
+            }
+        }
+
         // ⚠️ 取的是 **flow 的** 那一步（不是 `tool.stepAt`）：角度第 0 步同时认
         // "线段"和"点"两种选择，选了哪一种决定后面还要选什么（见 ToolFlow.altBranch）。
         return when {
@@ -3381,7 +3852,7 @@ class GraphState {
                 name = nextObjectName(ObjectKind.POINT),
                 point = point,
                 kind = kind,
-                colorIndex = nextObjectColor()
+                colorIndex = POINT_DEFAULT_COLOR_INDEX
             )
         )
         return id
@@ -3529,7 +4000,7 @@ class GraphState {
                             name = name,
                             point = mid,
                             kind = SnapKind.POINT,
-                            colorIndex = nextObjectColor()
+                            colorIndex = POINT_DEFAULT_COLOR_INDEX
                         )
                     )
                     message = "$name：中点已画出"
@@ -3600,6 +4071,147 @@ class GraphState {
                 addLineObject(rayOf(pts[0], pts[1]), "射线", GLineKind.RAY)
             } else {
                 message = "射线：需要两个点（这次只有 ${pts.size} 个），已重新开始"
+            }
+
+            // ---- 第六栏：圆 ----
+            //
+            // 五种方式全部产出一条**隐函数曲线**（见 `CircleConics.kt` 文件头）：
+            // 和普通函数一样进列表，显隐 / 着色 / 属性页 / 删除全部复用既有管线，
+            // 颜色默认是工具线的黑（夜间白，见 [addToolCurve]）。
+            FunctionTool.CIRCLE_CENTER_POINT -> {
+                if (pts.size >= 2) {
+                    val eq = circleEquation(pts[0], distance(pts[0], pts[1]))
+                    message = if (eq == null) {
+                        "圆心·点：圆心和圆上一点重合了，圆画不出来（已重新开始）"
+                    } else {
+                        "已画出圆 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                    }
+                } else {
+                    message = "圆心·点：需要圆心和圆上一点（这次只有 ${pts.size} 个），已重新开始"
+                }
+            }
+
+            FunctionTool.CIRCLE_CENTER_RADIUS -> {
+                // 点一条线段那条路在 [toolTap] 里特判了（状态机只认点）。
+                if (pts.size >= 3) {
+                    val r = distance(pts[1], pts[2])
+                    val eq = circleEquation(pts[0], r)
+                    message = if (eq == null) {
+                        "圆心·半径：那两个半径端点重合了，圆画不出来（已重新开始）"
+                    } else {
+                        "已画出圆 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                    }
+                } else {
+                    message = "圆心·半径：需要圆心和两个半径端点（这次只有 ${pts.size} 个），已重新开始"
+                }
+            }
+
+            FunctionTool.CIRCLE_RADIUS_CENTER -> {
+                val center = pts.firstOrNull()
+                if (center == null) {
+                    message = "半径·圆心：先点一个圆心"
+                } else {
+                    // 面板由界面观察 [radiusInputCenter] 弹出；这一句只是提示
+                    radiusInputCenter = center
+                    message = "输入半径（可以写滑动条，比如 d）"
+                }
+            }
+
+            FunctionTool.CIRCLE_THREE_POINTS -> {
+                if (pts.size >= 3) {
+                    val found = circleThroughThreePoints(pts[0], pts[1], pts[2])
+                    val eq = found?.let { circleEquation(it.first, it.second) }
+                    message = if (eq == null) {
+                        "过三点：这三点在同一条直线上（或有两个重合），画不出圆（已重新开始）"
+                    } else {
+                        "已画出圆 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                    }
+                } else {
+                    message = "过三点：需要三个不同的点（这次只有 ${pts.size} 个），已重新开始"
+                }
+            }
+
+            FunctionTool.CIRCLE_ARC -> {
+                if (pts.size >= 3) {
+                    val spec = arcOf(pts[0], pts[1], pts[2])
+                    message = if (spec == null) {
+                        "圆弧：起点和圆心重合了，弧画不出来（已重新开始）"
+                    } else {
+                        // t 是弧度：这一条**不管全局度制**怎么设都按弧度解释
+                        val name = addToolCurve(
+                            PlotMode.PARAMETRIC,
+                            spec.xs,
+                            spec.ys,
+                            tMin = spec.tMin,
+                            tMax = spec.tMax,
+                            degrees = false
+                        )
+                        "已画出圆弧 $name"
+                    }
+                } else {
+                    message = "圆弧：需要圆心、起点、终点（这次只有 ${pts.size} 个），已重新开始"
+                }
+            }
+
+            // ---- 第七栏：圆锥曲线 ----
+            //
+            // 几何部分走**定义式**（`|PF1|+|PF2| = 2a` 这种），这样任意朝向都成立，
+            // 也不用解坐标系旋转；采样仍然是隐函数那一套。
+            FunctionTool.ELLIPSE -> {
+                if (pts.size >= 3) {
+                    val eq = ellipseEquation(pts[0], pts[1], pts[2])
+                    message = if (eq == null) {
+                        "椭圆：这个点落在两焦点连线上（或焦点重合），画不出椭圆（已重新开始）"
+                    } else {
+                        "已画出椭圆 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                    }
+                } else {
+                    message = "椭圆：需要两个焦点和椭圆上一点（这次只有 ${pts.size} 个），已重新开始"
+                }
+            }
+
+            FunctionTool.CONIC_FIVE_POINTS -> {
+                if (pts.size >= 5) {
+                    val eq = conicThroughPoints(pts.take(5))
+                    message = if (eq == null) {
+                        "圆锥曲线：这五个点画不出圆锥曲线（重合 / 共线），已重新开始"
+                    } else {
+                        "已画出圆锥曲线 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                    }
+                } else {
+                    message = "圆锥曲线：需要五个点（这次只有 ${pts.size} 个），已重新开始"
+                }
+            }
+
+            FunctionTool.PARABOLA -> {
+                // 第 0 步焦点（点）、第 1 步准线（直线）。准线可以是已有的直线/线段，
+                // 也可以直接点坐标轴（[axisLineAt] 那条内联直线）。
+                val focus = pts.firstOrNull()
+                val directrix = pickedLine(flow)
+                val eq = if (focus != null && directrix != null) {
+                    parabolaEquation(focus, directrix)
+                } else {
+                    null
+                }
+                message = when {
+                    focus == null -> "抛物线：先点焦点"
+                    directrix == null -> "抛物线：再点一条准线（可以先用「直线」工具画一条）"
+                    eq == null -> "抛物线：这条准线通过了焦点（或退化了），画不出抛物线（已重新开始）"
+                    else -> "已画出抛物线 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                }
+            }
+
+            FunctionTool.HYPERBOLA -> {
+                if (pts.size >= 3) {
+                    val eq = hyperbolaEquation(pts[0], pts[1], pts[2])
+                    message = if (eq == null) {
+                        "双曲线：这个点到两焦点的距离相等（或焦点重合），画不出双曲线（已重新开始）"
+                    } else {
+                        "已画出双曲线 ${addToolCurve(PlotMode.IMPLICIT, eq)}：$eq"
+                    }
+                } else {
+                    message = "双曲线：需要两个焦点和曲线上一点（这次只有 ${pts.size} 个），已重新开始"
+                }
             }
         }
 
@@ -3681,7 +4293,7 @@ class GraphState {
                         name = name,
                         point = xf(objPoint),
                         kind = SnapKind.POINT,
-                        colorIndex = nextObjectColor()
+                        colorIndex = POINT_DEFAULT_COLOR_INDEX
                     )
                 )
                 "$what：$name 已画出"
@@ -3927,7 +4539,8 @@ class GraphState {
             name = nextObjectName(ObjectKind.LINE),
             line = GLine(line.p, line.q, kind),
             role = role,
-            colorIndex = nextObjectColor()
+            // 工具画出来的线默认**黑**（夜间白），见 TOOL_CURVE_COLOR_INDEX
+            colorIndex = TOOL_CURVE_COLOR_INDEX
         )
         addObject(o)
         return o
@@ -4165,14 +4778,6 @@ class GraphState {
 
         /** [TAP_POINT_FRACTION] 的像素下限（20px ≈ 10dp，理由同 [MIN_TAP_SLOP_PX]）。 */
         const val MIN_TAP_POINT_PX = 20f
-
-        private fun defaultFunction() = PlotFunction(
-            id = 1L,
-            mode = PlotMode.EXPLICIT,
-            src1 = "sin(x)",
-            colorIndex = 0,
-            name = "a(x)"
-        )
     }
 }
 

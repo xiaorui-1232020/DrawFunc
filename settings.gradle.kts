@@ -34,6 +34,15 @@ dependencyResolutionManagement {
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/public")
         google()
+        // BlurView 只发布在 JitPack（`com.github.Dimezis:BlurView`）。
+        // 用 content {} 限制范围：只有这一个 group 走 jitpack，
+        // 其余依赖不会去它那里查，避免多一次网络往返、也避免它顶替同名构件。
+        // 放在 repo1 之前：repo1 对同一路径会返回 429（限流），重试也没用。
+        maven("https://jitpack.io") {
+            content {
+                includeGroup("com.github.Dimezis")
+            }
+        }
         // 直接用 repo1：mavenCentral() 指向的 repo.maven.apache.org 在本机不通
         maven("https://repo1.maven.org/maven2")
     }

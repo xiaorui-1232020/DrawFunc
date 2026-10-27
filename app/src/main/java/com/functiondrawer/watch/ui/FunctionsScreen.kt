@@ -7,6 +7,7 @@
 package com.functiondrawer.watch.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -15,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +44,7 @@ import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -61,7 +64,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -245,8 +247,8 @@ private const val LIST_TOP = 0.245f
  * 工具 chip 的高度（占**屏宽** —— 和 [SECTION_GAP] / [SECTION_TITLE_H] 一样都按短边走，
  * 也就是"控件尺寸"那一类，只在位置上才用真实屏高）。
  *
- * 0.092 × 233dp ≈ 21dp：比列表行（0.15 ≈ 35dp）矮一档 —— 这一屏有五栏、
- * 十行 chip（长条屏不需要滚动，五栏本来就排得下）。
+ * 0.092 × 233dp ≈ 21dp：比列表行（0.15 ≈ 35dp）矮一档 —— 这一屏现在有七栏
+ * （加了「圆」「圆锥曲线」两栏），圆表上要滚动才看得完，方屏/长条屏仍然排得下。
  * chip 的高度**不跟屏高走**：手机屏高是短边的 2.2 倍，按屏高算会得到 80dp 高的
  * 大按钮，和同一屏里的字号/圆点完全不成比例。
  */
@@ -300,7 +302,7 @@ private const val ARC_MARGIN = 0.95f
  * 每一栏的入场：200ms 淡入 + 从 0.94 放大到 1，第 index 栏再晚 40ms。
  *
  * 和函数列表那边（220 / 45）是同一个量级、同一个"很轻"的意图：
- * 这一屏只有五栏，交错感比列表弱一点才不显得磨蹭。
+ * 这一屏的栏数不多（七栏），交错感比列表弱一点才不显得磨蹭。
  */
 private const val SECTION_IN_MS = 200
 private const val SECTION_STAGGER_MS = 40
@@ -311,8 +313,6 @@ private const val CHIP_POP = 1.06f
 private const val CHIP_POP_DOWN_MS = 130
 /** 选中态那圈外发光淡入淡出的时长。 */
 private const val CHIP_SEL_MS = 160
-/** 清屏键"可用 / 压暗"之间过渡的时长。 */
-private const val TRASH_SWITCH_MS = 180
 // （这里原来还有 `BUBBLE_IN_MS` / `PROPERTY_TOP` / `PROPERTY_MAX_H` —— 全是给
 //  "对象属性浮层"（`ObjectPropertiesBubble`）用的：出现时长、卡片顶边、卡片高度上界。
 //  浮层本轮整个删了（入口也删了），这三个数在本文件里**没有任何使用者**，
@@ -331,7 +331,6 @@ private const val TRASH_SWITCH_MS = 180
  * 功能界面。
  *
  * @param activeTool 当前选中的工具（默认「移动」，状态在 `GraphState` 里）
- * @param objectCount 已经画了几个几何对象（清屏键用它决定要不要"看起来可点"）
  * @param onSelectTool 选了一个工具：状态层会**自动回图像界面**开始取点
  * @param onClearObjects 右上角垃圾桶短按：清掉所有几何对象（不动函数/方程）
  * @param onClearAll 右上角垃圾桶**长按**：连函数/方程一起清掉（原来"长按 +"的能力）
@@ -343,7 +342,6 @@ private const val TRASH_SWITCH_MS = 180
 @Composable
 fun FunctionsScreen(
     activeTool: FunctionTool,
-    objectCount: Int,
     metrics: WatchMetrics,
     onSelectTool: (FunctionTool) -> Unit,
     onClearObjects: () -> Unit,
@@ -371,6 +369,25 @@ fun FunctionsScreen(
     val scheme = MaterialTheme.colors
     val listState = rememberLazyListState()
     val density = LocalDensity.current
+    // 教程第 26 步「看看这里的全部工具」：列表要自己先上后下滚一遍。
+    // `LazyListState` 只有这一屏拿得到，所以把滚动动作登记给状态机；
+    // 压暗幕、挡住用户手指、播完推进，都由 GraphScreen 那边统一编排。
+    DisposableEffect(listState) {
+        Tutorial.scrollTools = {
+            // 先回顶上，再"先向下浏览到底、再滚回顶上"（各 2 秒）
+            listState.scrollToItem(0)
+            // 缓动取"先匀加速、后匀减速"的三次贝塞尔，中段速度接近匀速
+            val spec = tween<Float>(
+                durationMillis = 2000,
+                easing = CubicBezierEasing(0.4f, 0f, 0.6f, 1f)
+            )
+            // 距离给得足够大（4 屏高），`animateScrollBy` 会在列表尽头自动夹住
+            val sweepPx = metrics.sizePx * 4f
+            listState.animateScrollBy(sweepPx, spec)
+            listState.animateScrollBy(-sweepPx, spec)
+        }
+        onDispose { Tutorial.scrollTools = null }
+    }
     // ---- 真实可用尺寸（不是短边）----
     //
     // 手机上暴露的第二个问题：这一屏的工具栏也只占了屏幕顶部的一个方格。
@@ -378,6 +395,10 @@ fun FunctionsScreen(
     // 圆表上等于直径，所以"按短边算"在手表上一直成立；手机（长条屏）上就全塌了。
     // 所以这里量一次真实可用区域，把"占屏幕百分之几的位置"换成真实尺寸算，
     // 详见 `FunctionList.ScreenGeometry` 上面那段说明（两屏共用这一层）。
+    // 在抽屉里时，横向手势交给 Pager（见下面 pointerInput 里的说明）。
+    // 必须在 composable 作用域读 —— CompositionLocal 不能在 pointerInput 里读。
+    val inDeck = LocalDrawerController.current != null
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val geometry = rememberScreenGeometry(maxWidth, maxHeight, metrics)
         val swipeEdgePx = with(density) { (metrics.sizeDp * EDGE_THRESHOLD).toPx() }
@@ -399,7 +420,7 @@ fun FunctionsScreen(
 
         // ---- 宽度自适应要用的两个量（和 FunctionList / SettingsScreen 同一套）----
         /** 圆屏还是方屏：方屏没有"越靠边越窄"的问题，直接给接近满宽。 */
-        val isRound = LocalConfiguration.current.isScreenRound
+        val isRound = isRoundScreen()
         /**
          * 列表上沿在屏幕上的 y（像素）。
          * 算某一项**此刻**该多宽要靠它把"项在列表里的偏移"换算成"屏幕高度的百分之几"
@@ -420,16 +441,9 @@ fun FunctionsScreen(
             animationSpec = tween(durationMillis = TOOLBAR_IN_MS, easing = FastOutSlowInEasing)
         )
 
-        // 清屏键的"红得有多实"：有东西可清 = 满档，没东西 = 压暗一档
-        // （但仍然看得出是红的）。两档的数值**不再写在这里**，而是共用
-        // `KeyPalette.dangerAlpha(...)` / `KeyPalette.DANGER_DIM_ALPHA` ——
-        // "函数文件"那一屏的删除键用的是**同一个暗档**（`KeyPalette.dangerDim`），
-        // 那个 0.45 只要在两处各写一遍就迟早会漂。
-        // 中间用 tween 过渡 —— 用户画完第一个几何对象 / 清完屏时，这颗键是渐变亮/暗的。
-        val trashAlpha by animateFloatAsState(
-            targetValue = KeyPalette.dangerAlpha(objectCount > 0),
-            animationSpec = tween(durationMillis = TRASH_SWITCH_MS, easing = FastOutSlowInEasing)
-        )
+        // 清屏键：**常亮红色**，不随"有没有东西可清"变色。
+        // 用户本轮原话："删除键在函数图像界面有描点的时候会变色，删掉。"
+        // 也就是这颗键在任何时候都是同一个红，不做明暗两档。
 
         // 表冠滚动工具列表。用 collectLatest：连续转动时只处理最新一次，
         // 否则会排出一长串滚动动画、松手之后还在滚。
@@ -574,6 +588,16 @@ fun FunctionsScreen(
                     }
                 }
                 .pointerInput(toolbarStrip) {
+                    // ---- 在抽屉里，横向手势**交给 Pager** ----
+                    //
+                    // 这条手势是"右边缘往左滑 → 回函数列表"，它会逐帧 consume
+                    // 整串事件。而 Pager 的翻页读的正是同一串位移 —— 两者抢事件，
+                    // 表现出来就是"滑到一半卡住、松手后才被路由拽过去"。
+                    // 用户说的"不像手机桌面那样流畅"就是它。
+                    //
+                    // 只要能拿到抽屉控制器（= 确实在 Pager 里），这条手势不安装；
+                    // 横滑由 Pager 全权处理（跟手 + 惯性 + 吸附）。
+                    if (inDeck) return@pointerInput
                     // ---- 右边缘往左滑 → 回函数列表（并播左右切换动画）----
                     awaitEachGesture {
                         awaitOneWayDrag(
@@ -620,7 +644,7 @@ fun FunctionsScreen(
                             }
                         )
                     }
-                }
+                }.then(backgroundWhenNoBlur())
         ) {
 
             // ---- 顶部抓手：和函数列表顶部那颗同一套语言（暗示可以滑动） ----
@@ -723,7 +747,7 @@ fun FunctionsScreen(
                     .offset(y = geometry.sy(TOOLBAR_TOP))
                     .width(toolbarRowWidth)
                     .height(metrics.sizeDp * TOOLBAR_H)
-                    // 入场：淡入 + 从 0.90 放大，和五栏的入场同一个写法（只是不等延迟）
+                    // 入场：淡入 + 从 0.90 放大，和各栏的入场同一个写法（只是不等延迟）
                     .graphicsLayer {
                         alpha = topIn
                         val s = 0.90f + 0.10f * topIn
@@ -750,11 +774,14 @@ fun FunctionsScreen(
                     icon = FolderIcon,
                     contentDescription = "函数文件",
                     metrics = metrics,
-                    modifier = Modifier.toolbarYield(
-                        progress = undoMenu.progress,
-                        toRight = false,
-                        rowWidthPx = toolbarRowWidthPx
-                    ),
+                    modifier = Modifier
+                        .toolbarYield(
+                            progress = undoMenu.progress,
+                            toRight = false,
+                            rowWidthPx = toolbarRowWidthPx
+                        )
+                        // 教程第 27 步要圈住这颗「函数文件」
+                        .tutorialAnchor(TutorialAnchors.TOOLS_FILE),
                     onClick = onOpenSaves
                 )
 
@@ -784,12 +811,8 @@ fun FunctionsScreen(
                         icon = Icons.Filled.Delete,
                         contentDescription = "清屏（按住不放才清）",
                         metrics = metrics,
-                        // 有东西可清 → 满亮的红；没东西 → 压暗一档（但仍然看得出是"红的那颗"）。
-                        // 两档的数值来自 `KeyPalette.dangerAlpha` / `DANGER_DIM_ALPHA`
-                        // （和"函数文件"那一屏的删除键**同一个暗档**）。
-                        // 这一档**渐变过去**（180ms）：画完图形/清完屏时这颗键的"可用感"
-                        // 是慢慢亮/暗的，不会啪一下换色。
-                        containerColor = KeyPalette.danger.copy(alpha = trashAlpha),
+                        // 常亮红色：不随"有没有东西可清"变色。
+                        containerColor = KeyPalette.danger,
                         contentColor = KeyPalette.text,
                         // 短按不做事：防误触。清空能力全在长按上（见 onClearAll）。
                         onClick = {}
@@ -815,7 +838,7 @@ fun FunctionsScreen(
             )
             }
 
-            // ---- 五栏工具 ----
+            // ---- 七栏工具 ----
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -831,14 +854,17 @@ fun FunctionsScreen(
                     //
                     // 这一屏在圆表上原来还有 0.06 屏高没用上（LIST_BOTTOM = 0.94）；
                     // 现在把这块也让给列表，底部余量取同一个物理距离 ——
-                    // 于是"五栏到底还是排得完"的结论不变，而手机上五栏能真正铺满全屏，
+                    // 于是"所有栏到底还是排得完"的结论不变，而手机上能真正铺满全屏，
                     // 长条屏下面不会再有空白。
                     .height(geometry.listHeight(metrics, geometry.sy(LIST_TOP))),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(metrics.sizeDp * SECTION_GAP)
+                verticalArrangement = Arrangement.spacedBy(metrics.sizeDp * SECTION_GAP),
+                // 教程第 26 步：列表由教程自己滚，**不许用户用手指滑**
+                //（上一步 / 退出两颗按钮在浮层里，不受影响）
+                userScrollEnabled = !Tutorial.blocksScroll
             ) {
-                // 五栏的**顺序**就是用户列的顺序（基本工具 → 度量 → 变换 → 作图 → 直线），
-                // 也就是 `ToolSection` 的声明顺序，不另外排。
+                // 七栏的**顺序**就是用户列的顺序（基本工具 → 度量 → 变换 → 作图 → 直线
+                // → 圆 → 圆锥曲线），也就是 `ToolSection` 的声明顺序，不另外排。
                 itemsIndexed(ToolSection.entries.toList(), key = { _, s -> s.name }) { index, section ->
                     // 这一栏里**每一个 chip 行**的宽度：按它此刻在屏幕上的高度算。
                     // 列表能滚，所以"第几栏"和"在屏幕的哪个高度"不是一回事 ——
@@ -854,7 +880,7 @@ fun FunctionsScreen(
                         metrics = metrics,
                         isRound = isRound
                     )
-                    // 这一栏的入场进度：整屏 `entered` 一翻就把五栏依次点亮。
+                    // 这一栏的入场进度：整屏 `entered` 一翻就把各栏依次点亮。
                     // 状态**放在这一项里面**（不在屏幕层共享）：LazyColumn 的行会被
                     // 回收重建，而 `entered` 那时已经是 true，重进来的栏直接就是 1 ——
                     // 所以来回滚不会重播（和函数列表那边 `RowEntrance` 同一个坑、同一个解法）。
@@ -894,23 +920,8 @@ fun FunctionsScreen(
             //     不再是 `sizeDp` —— 手机上短边是屏宽，用它算出来的带子和热区会对不上）；
             //   * 抓手胶囊画在这个容器的**竖直正中**（`CenterEnd`），和第一屏左边那道
             //     `Alignment.CenterStart` 的小竖条是同一种摆法（那道也是"短条 + 宽热区"）。
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(geometry.sx(EDGE_ZONE_W)),
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                // 看得见的竖抓手（和顶部/左侧那几道同一套语言：小圆角条）
-                Box(
-                    modifier = Modifier
-                        .padding(end = metrics.sizeDp * 0.012f)
-                        .width(metrics.sizeDp * 0.011f)
-                        .height(metrics.sizeDp * 0.13f)
-                        .clip(CircleShape)
-                        .background(scheme.outlineVariant)
-                )
-            }
+            // 右侧提示条已按用户要求删除 —— 页面位置改由屏幕底部的指示点表达。
+            // 手势热区（`EDGE_ZONE_W`）保持不变，只是不再画那道竖条。
         }
     }
 }
@@ -951,7 +962,7 @@ private fun ToolSectionBlock(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // 入场只动图层：栏的占位尺寸从头到尾不变，所以五栏不会在入场时互相挤动
+            // 入场只动图层：栏的占位尺寸从头到尾不变，所以各栏不会在入场时互相挤动
             .graphicsLayer {
                 alpha = entrance
                 val s = 0.94f + 0.06f * entrance
@@ -1044,7 +1055,7 @@ private fun ToolSectionBlock(
  *
  * 为什么不用 `MiniChip` 了：它的底色是**瞬间**切换的（`Common.kt` 里一次 `when` 判断），
  * 而这次要的正是"底色渐染"，那个文件本轮不归我改。这里的配色、字号（`fontTiny`）、
- * 形状（`PillShape`）、按压反馈（缩放 + 一层很淡的白）全部逐条照抄 `MiniChip`，
+ * 形状（`PillShape`）、按压反馈（缩放 + 一层很淡的覆盖色）全部逐条照抄 `MiniChip`，
  * 所以**静止时两者看不出区别**。
  *
  * 弹一下（1 → [CHIP_POP] → 1，130ms 收回）保留：它不是发光，而是"点到了"的手感，
@@ -1088,6 +1099,8 @@ private fun ToolChip(
         contentColor = lerp(KeyPalette.textMuted, KeyPalette.text, sel),
         shape = PillShape,
         modifier = modifier
+            // 液态玻璃：顶部光泽 + 1dp 渐变描边（ColorOS 16 同款材质）
+            .then(if (LocalGlassTheme.current) Modifier.glassSurface(PillShape) else Modifier)
             .graphicsLayer {
                 // 弹一下 × 按压缩放（两个都只动图层）
                 scaleX = pop.value * press.scale
@@ -1101,13 +1114,14 @@ private fun ToolChip(
             )
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // 按下时叠一层很淡的白 = 提亮一档（照抄 MiniChip：用图层 alpha 而不是
+            // 按下时叠一层很淡的覆盖色 = 明度挪一档（夜间提亮 / 白天压暗，见 KeyPalette.pressGlow）。
+            // 照抄 MiniChip：用图层 alpha 而不是
             // background(color.copy(alpha))，这样每帧只失效图层、不重组）
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = press.glowAlpha }
-                    .background(Color.White)
+                    .background(KeyPalette.pressGlow)
             )
             Text(
                 text = label,
@@ -1436,6 +1450,8 @@ internal fun GraphObjectRow(
     // （`DragGestures.rememberRowSwipeDelete` + `PlotMetrics.SWIPE_DELETE_*`）——
     // 原来这里是一整段和 `FunctionList.FunctionRow` 互相抄出来的代码。
     val swipe = rememberRowSwipeDelete(obj.id, onDelete)
+    // 抽屉里把行上的"往右"让给 Pager（用户要求"函数条右划可以滑动界面"）。
+    val yieldRightToPager = LocalDrawerController.current != null
     // 行宽的**唯一**来源（圆屏弧宽 / 非圆屏满宽）：删除阈值、甩出距离都从它推。
     val rowWidthDp = geometry.rowWidth(metrics, widthFraction, isRound)
     val rowWidthPx = with(LocalDensity.current) {
@@ -1449,6 +1465,7 @@ internal fun GraphObjectRow(
         color = lerp(KeyPalette.normal, KeyPalette.danger, swipeProgress * SWIPE_DELETE_TINT),
         shape = PillShape,
         modifier = Modifier
+            .then(if (LocalGlassTheme.current) Modifier.glassSurface(PillShape) else Modifier)
             // 宽度和 [rowWidthPx] 同一个来源（圆屏弧宽 / 非圆屏满宽）
             .width(rowWidthDp)
             .height(metrics.sizeDp * 0.15f)
@@ -1491,7 +1508,13 @@ internal fun GraphObjectRow(
             // 和函数行逐项一致（同一个阈值常量、同一套动画、同一个"播完再删"）。
             // 第二屏的删除行为不受影响：那一屏压根没有对象行，它自己的两条边缘手势
             // （顶部下滑、右边缘左滑）仍然挂在根节点上、各自的 `startsIn` 一个字没动。
-            .then(swipe.gesture(obj.id, rowWidthPx))
+            .then(
+                swipe.gesture(
+                    obj.id,
+                    rowWidthPx,
+                    yieldRightToPager = yieldRightToPager
+                )
+            )
     ) {
         // ---- 两个手势区共用的版面尺寸（下面两区都按它算）----
         //

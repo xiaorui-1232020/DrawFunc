@@ -199,6 +199,8 @@ fun SliderRow(
     // `rememberRowSwipeDelete` + `PlotMetrics.SWIPE_DELETE_*` —— 这一行**没有**第四份
     // 搓手势的代码。唯一多传的是 `skipIfDownConsumed = true`（见文件头那一节）。
     val swipe = rememberRowSwipeDelete(slider.id, onDelete)
+    // 抽屉里把行上的"往右"让给 Pager（用户要求"函数条右划可以滑动界面"）。
+    val yieldRightToPager = LocalDrawerController.current != null
     val rowWidthPx = with(density) { rowWidth.toPx() }
     val swipeProgress = swipe.progress(rowWidthPx)
 
@@ -270,7 +272,8 @@ fun SliderRow(
                 swipe.gesture(
                     rowKey = slider.id,
                     rowWidthPx = rowWidthPx,
-                    skipIfDownConsumed = true
+                    skipIfDownConsumed = true,
+                    yieldRightToPager = yieldRightToPager
                 )
             )
     ) {
@@ -432,7 +435,7 @@ private fun SliderTrack(
                     .height(trackH)
                     .align(Alignment.CenterStart)
                     .clip(PillShape)
-                    .background(Color.White.copy(alpha = 0.16f))
+                    .background(KeyPalette.track)
             )
             // 已选中的部分（强调色）
             Box(

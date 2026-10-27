@@ -8,36 +8,43 @@ import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Shapes
 import androidx.compose.material.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.functiondrawer.watch.ui.AppKeyColors
+import com.functiondrawer.watch.ui.AppRoleColors
+import com.functiondrawer.watch.ui.CurvePaletteDay
+import com.functiondrawer.watch.ui.CurvePaletteNight
+import com.functiondrawer.watch.ui.DayKeyColors
+import com.functiondrawer.watch.ui.NightKeyColors
+import com.functiondrawer.watch.ui.WatchPalette
+import com.functiondrawer.watch.ui.WatchPaletteDay
+import com.functiondrawer.watch.ui.activeCurveColors
+import com.functiondrawer.watch.ui.activeKeyColors
+import com.functiondrawer.watch.ui.activeGlassTheme
+import com.functiondrawer.watch.ui.activeRoleColors
 import com.functiondrawer.watch.ui.watchColors
 
 /**
- * 曲线配色：12 种。
+ * 曲线配色：12 种 —— **日夜各一套**，这里读的是当前生效的那一套。
  *
- * 全部是**亮色调 / 粉彩**，因为在纯黑底上才够跳、又不刺眼。
- * 12 种两两之间都能分辨（亮度或色相至少差一档），这是"多条曲线同屏"的可用性下限；
- * 用户可以在函数列表里长按圆点自己挑，所以这个顺序也决定了默认分配的顺序
- * （第 1 条函数拿第 1 个颜色，依此类推）。
+ * 为什么是 `get()` 而不是一个常量 List：
+ * 黑底那套是粉彩（`#7FD8FF` 天蓝、`#FFF2A0` 奶油黄……），它们靠"亮"从黑底里跳出来；
+ * 白底上这些颜色的相对亮度是 0.7~0.95，**和白纸几乎一样**，12 条里有 6 条会直接消失。
+ * 所以白天必须换一组深饱和色（`CurvePaletteDay`），而不是调透明度 ——
+ * "把背景刷白"这个做法在曲线这一步就会彻底露馅。
+ *
+ * 调用点（9 个文件、20 多处 `CurvePalette[i]`）**一行都没改**：
+ * 它现在是个 getter，读 [activeCurveColors] 快照，模式一换自动跟着换。
+ * 顺序仍然是"第 1 条函数拿第 1 个颜色"，两套的 12 个位置色相语义一一对应
+ * （第 1 个都是蓝、第 2 个都是红、第 3 个都是绿……），所以切换模式时
+ * 函数的颜色**不会跳位**，只是同一支颜色换了个明度档。
  */
-val CurvePalette: List<Color> = listOf(
-    Color(0xFF7FD8FF), // 天蓝
-    Color(0xFFFFB4AB), // 珊瑚
-    Color(0xFFB7F397), // 嫩绿
-    Color(0xFFD0BCFF), // 淡紫
-    Color(0xFFFFD8A6), // 暖橙
-    Color(0xFF8FF0E4), // 青绿
-    Color(0xFFFFF2A0), // 奶油黄
-    Color(0xFFF8A8D8), // 樱花粉
-    Color(0xFFA8C7FF), // 长春花蓝
-    Color(0xFF9EE8A8), // 薄荷
-    Color(0xFFFFC2A0), // 蜜桃
-    Color(0xFFC8E6A0)  // 抹茶
-)
+val CurvePalette: List<Color> get() = activeCurveColors.value
 
 /**
  * 字号整体调小：默认字体是按手机屏定的，在 233dp 的圆表上会显得过于笨重。
@@ -111,10 +118,59 @@ fun watchShapeOf(height: Dp): RoundedCornerShape =
  */
 val PillShape: Shape = RoundedCornerShape(percent = 50)
 
+/**
+ * 应用主题外壳。
+ *
+ * @param dayMode **白天模式**开关。`false`（默认）= **夜间**，也就是这个 App 原来那套
+ *   黑底 UI（[WatchPalette] + `CurvePaletteNight` + [NightKeyColors]）；
+ *   `true` = 白天模式（[WatchPaletteDay] + `CurvePaletteDay` + [DayKeyColors]）。
+ *
+ *   ⚠️ **参数名是 `dayMode`，不是 `nightMode`** —— 这是本轮最重要的一处修正。
+ *   上一版把它叫 `nightMode` 且 `true = 白底`，于是设置页里"夜间模式：开"
+ *   显示的是白屏，用户直接说"反了"。正过来之后语义和字面一致：
+ *   **开关打开 = 夜间 = 黑底 = 原来那套**。
+ *
+ *   设置页那一行仍然叫「夜间模式」（用户就是这么叫的），显示的是 `!dayMode`，
+ *   点击翻转 `dayMode` —— 界面文案与内部字段名方向不同，但都写在
+ *   `ThemeSettingsScreen` 一处，不会散。
+ *
+ *   存档层是 `SettingsFields.dayMode`（第 11 段，`false` = 夜间）。
+ *   它和旧版的 `nightMode` 段**取值完全一致**（旧版 `false` = 黑底），
+ *   所以老存档不需要迁移：装上新包，原来黑的还是黑的。
+ *
+ * 四条线（M2 的 12 个槽位 / MD3 扩展属性 / 曲线 12 色 / 按键 10 色）
+ * 在**同一个 composable** 的 SideEffect 里一起换，所以不存在
+ * "背景换了但按键还是旧的"这种中间态 —— 那正是"只把背景变白"的症状。
+ */
 @Composable
-fun FunctionDrawerTheme(content: @Composable () -> Unit) {
+fun FunctionDrawerTheme(
+    dayMode: Boolean = false,
+    /**
+     * 是否「液态玻璃」主题（`ThemeStyle.LIQUID_GLASS`）。
+     *
+     * 它只切换**材质**（半透明面、高光边、模糊底），和明暗正交。
+     * 真正生效的方式是把 [activeGlassTheme] 这个全局状态置位 ——
+     * `KeyPalette` 的所有 getter 都会读它，于是几百处调用点一次性换成玻璃材质。
+     */
+    glass: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    val palette: AppRoleColors = if (dayMode) WatchPaletteDay else WatchPalette
+    val curves: List<Color> = if (dayMode) CurvePaletteDay else CurvePaletteNight
+    val keys: AppKeyColors = if (dayMode) DayKeyColors else NightKeyColors
+
+    // 扩展属性（`scheme.surfaceContainerHigh` 那一套）读的是这份快照状态：
+    // 把它写进 SideEffect（组合成功之后跑），读取方就会在开关拨动时重组。
+    // 值没变时 Snapshot 不会通知，所以不会死循环。
+    SideEffect {
+        activeRoleColors.value = palette
+        activeCurveColors.value = curves
+        activeKeyColors.value = keys
+        activeGlassTheme.value = glass
+    }
+
     MaterialTheme(
-        colors = watchColors(),
+        colors = watchColors(palette),
         typography = WatchTypography,
         shapes = WatchShapes,
         content = content

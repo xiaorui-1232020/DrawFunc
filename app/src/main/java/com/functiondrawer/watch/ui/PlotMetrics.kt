@@ -1,5 +1,6 @@
 package com.functiondrawer.watch.ui
 
+import com.functiondrawer.watch.engine.CalcPrecision
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -1716,7 +1717,9 @@ fun toolbarMenuHandleAlpha(progress: Float): Float =
  * 字段顺序（就是下面主构造参数的顺序，**不许改**，只能往后追加）：
  * ```
  * 0 坐标系序号 | 1 网格 | 2 坐标轴 | 3 坐标数字 | 4 函数示例 | 5 切坐标系要确认 |
- * 6 度制(DEG) | 7 屏蔽系统手势 | 8 按键缩放栏 | 9 首次用工具"回到移动"提示
+ * 6 度制(DEG) | 7 屏蔽系统手势 | 8 按键缩放栏 | 9 首次用工具"回到移动"提示 |
+ * 10 白天模式(1=白底那套 / 0=夜间黑底) | 11 表冠模式 | 12 表冠灵敏度(十分之一为单位的整数) |
+ * 13 主题风格(0=Material / 1=液态玻璃) | 14 模糊背景(1=开 / 0=关)
  * ```
  *
  * 默认值必须和 `GraphState.WatchSettings` 的默认值**同值**（那边是数据类的默认值，
@@ -1749,7 +1752,72 @@ class SettingsFields(
      * （有意的：这一条说明本轮才补上，缺了它老用户会少知道一件事，
      * 代价只是一次可以勾掉的框）。勾过之后写下去就是 0，永久不再弹。
      */
-    val confirmReturnToMove: Boolean = true
+    val confirmReturnToMove: Boolean = true,
+    /**
+     * **白天模式**（`true` = 白底那套新配色）。老存档缺这一段 → **false**，也就是**夜间黑底**。
+     *
+     * ⚠️ 字段名是 `dayMode`，语义是"是否白天"，**方向不要反过来**。
+     * 上一版这一段叫 `nightMode` 但 `true` 表示白底 —— 设置页里"夜间模式：开"
+     * 显示出来是白屏，用户一句"反了"就是它。
+     *
+     * 老存档兼容：旧版 `nightMode=false` 表示黑底，新版 `dayMode=false` 也表示黑底，
+     * **存值语义完全一致**（只是换名），所以老存档零迁移。
+     * 详见 `WatchSettings.dayMode` 的说明。
+     */
+    val dayMode: Boolean = false,
+    /**
+     * 表冠模式的**序号**（`CrownMode.entries` 下标：0 = OPPO、1 = 华为/三星）。
+     * 老存档缺这一段 → 0（OPPO，本 App 一直用的那套，老用户零感知）。
+     */
+    val crownMode: Int = 0,
+    /**
+     * 表冠灵敏度的**十分之一**（10 = 1.0 倍，1 = 0.1 倍，100 = 10.0 倍）。
+     * 老存档缺这一段 → 10（1.0 倍，改动前的手感）。
+     *
+     * 不直接存 Float：CSV 里的浮点数会带区域设置的小数点/科学计数法
+     * （`toString()` 结果随 Locale 变），绕一圈可能变味；整数干净。
+     */
+    val crownSpeedTenths: Int = 10,
+    /**
+     * **主题风格**的序号（`ThemeStyle.entries` 下标：0 = Material、1 = 液态玻璃）。
+     *
+     * 老存档缺这一段 → 0（Material，也就是改动前的外观，零感知）。
+     *
+     * 为什么单独一段而不是塞进 `dayMode`：明暗和质感是两个正交维度，
+     * 挤进一个布尔以后就没法表达"白天 + 玻璃"这种组合。
+     */
+    val themeStyle: Int = 0,
+    /**
+     * **模糊背景**（`true` = 抽屉背后透出函数图的模糊版）。
+     *
+     * 老存档缺这一段 → **true**：上一版（3.28）所有主题都共用一张静态模糊图，
+     * 缺省成 `true` 才是"升级上来和之前一模一样"。
+     *
+     * 它和 [themeStyle] 是两个正交维度（见 `WatchSettings.blurBackdrop` 那张表），
+     * 所以**不能**塞进同一段里编码。
+     */
+    val blurBackdrop: Boolean = true,
+    /**
+     * **模糊程度**（0~100，`WatchSettings.blurStrength × 100`，3.40 新增）。
+     *
+     * 老存档缺这一段 → **100**：升级上来糊度和之前一模一样。
+     */
+    val blurStrengthPercent: Int = 100,
+    /**
+     * **计算精度**（`CalcPrecision.entries` 下标：0 = 3 位、1 = 8 位、2 = 16 位）。
+     *
+     * 老存档缺这一段 → **1（8 位小数）**：这是本 App 改动前的显示习惯，
+     * 升级上来的用户不该因为多了一段存档就换来一个陌生的小数位数。
+     */
+    val precision: Int = 1,
+    /**
+     * **按钮下阴影强度**（0~100，`WatchSettings.keyShadowStrength × 100`）。
+     *
+     * 老存档缺这一段 → **10**：这是用户点名的默认值（"按钮下阴影强度默认值改成 10%"）。
+     * 和上面那条"升级上来零感知"不同 —— 这一项在旧存档里根本不存在，
+     * 也就没有"旧观感"要保住，直接按 10% 走。
+     */
+    val keyShadowPercent: Int = 10
 ) {
 
     /** 打包成存档里那一行（字段之间用逗号）。 */
@@ -1763,7 +1831,20 @@ class SettingsFields(
         flag(degrees),
         flag(blockSystemGestures),
         flag(showZoomBar),
-        flag(confirmReturnToMove)
+        flag(confirmReturnToMove),
+        flag(dayMode),
+        crownMode.toString(),
+        crownSpeedTenths.toString(),
+        themeStyle.toString(),
+        flag(blurBackdrop),
+        // 第 16 段：**占位**。这一格原来是「存帧调试开关」，功能已按用户要求整条删除。
+        // 位置必须留着并恒定写 "0"，否则老存档第 17~19 段会整体错位。
+        "0",
+        blurStrengthPercent.toString(),
+        // 第 18 段：计算精度（0=3 位 / 1=8 位 / 2=16 位）
+        precision.toString(),
+        // 第 19 段：按钮下阴影强度（0~100 整数）
+        keyShadowPercent.toString()
     ).joinToString(SEPARATOR)
 
     companion object {
@@ -1772,7 +1853,7 @@ class SettingsFields(
         const val SEPARATOR = ","
 
         /** 字段个数。加一段就 +1（离线单测拿它对拍编码结果）。 */
-        const val FIELD_COUNT = 10
+        const val FIELD_COUNT = 19
 
         /** 最老的那一批有几段：连它都凑不齐就整组退回默认。 */
         private const val OLDEST_FIELD_COUNT = 4
@@ -1805,13 +1886,36 @@ class SettingsFields(
                 degrees = boolAt(parts, 6, default = false),
                 blockSystemGestures = boolAt(parts, 7, default = true),
                 showZoomBar = boolAt(parts, 8, default = false),
-                confirmReturnToMove = boolAt(parts, 9, default = true)
+                confirmReturnToMove = boolAt(parts, 9, default = true),
+                dayMode = boolAt(parts, 10, default = false),
+                crownMode = intAt(parts, 11, default = 0),
+                crownSpeedTenths = intAt(parts, 12, default = 10),
+                themeStyle = intAt(parts, 13, default = 0),
+                blurBackdrop = boolAt(parts, 14, default = true),
+                // 第 16 段（原「存帧调试」）已删除，读到什么值都忽略。
+                // 第 17 段：模糊程度（0~100）。缺 → 100（和之前一样糊）。
+                blurStrengthPercent = intAt(parts, 16, default = 100).coerceIn(0, 100),
+                // 第 18 段：计算精度（0=3 位 / 1=8 位 / 2=16 位）。缺 → 1（8 位）；
+                // 越界（未来版本写了更大的数）按枚举上限夹住。
+                precision = intAt(parts, 17, default = 1)
+                    .coerceIn(0, CalcPrecision.entries.size - 1),
+                // 第 19 段：按钮下阴影强度（0~100）。缺 → 10（用户点名的默认值）。
+                keyShadowPercent = intAt(parts, 18, default = 10).coerceIn(0, 100)
             )
         }
 
         /** 第 [index] 段是不是 "1"；这一行没有这一段就用 [default]。 */
         private fun boolAt(parts: List<String>, index: Int, default: Boolean): Boolean =
             if (parts.size > index) parts[index] == "1" else default
+
+        /**
+         * 第 [index] 段当整数读；这一段缺失/不是数字就用 [default]。
+         *
+         * 不 coerce 范围：序号越界由读取侧（`Store` → `WatchSettings` 的映射）
+         * 用 `entries.getOrNull` 兜底，和 [coordinateSystem] 越界的处理分层一致。
+         */
+        private fun intAt(parts: List<String>, index: Int, default: Int): Int =
+            if (parts.size > index) parts[index].toIntOrNull() ?: default else default
     }
 }
 
