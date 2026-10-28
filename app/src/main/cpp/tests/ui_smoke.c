@@ -431,6 +431,20 @@ int main(int argc, char **argv)
         model()->settings.complex_plane = false;
     }
 
+    /* 打开坐标刻度数字：验证横轴数字跟轴走、纵轴数字在轴左侧（对齐 main 1.2.28） */
+    model()->settings.show_numbers = true;
+    ui_show(UI_SCR_GRAPH);
+    pump(6);
+    dump("24_graph_numbers");
+    /* 轴滑到屏幕左上角外：横轴数字应连续贴在顶部，纵轴数字贴左边 */
+    model()->vp.center_x = 8.0;
+    model()->vp.center_y = -8.0;
+    ui_graph_invalidate();
+    pump(4);
+    dump("25_graph_numbers_corner");
+    model()->settings.show_numbers = false;
+    model_reset_view();
+
     /* PNG 导出（先回到图像屏，导出按模型重画） */
     ui_show(UI_SCR_GRAPH);
     pump(6);

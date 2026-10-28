@@ -173,11 +173,42 @@ static bool validate_text(const char *src, fd_plot_mode mode, bool degrees,
 /* 键盘                                                                */
 /* ------------------------------------------------------------------ */
 
+/* 根号 / 绝对值类按键插下的「空骨架」：退格时一次还回去，不留下半截括号。 */
+static const char *const k_structural[] = {
+        "sqrt()", "cbrt()", "abs()", "√()", "∛()", "root(,)",
+};
+
+/** 光标左边正好是一个完整空骨架时整段删掉；返回 true 表示已处理。 */
+static bool delete_structural_before(lv_obj_t *ta)
+{
+    if (!ta) return false;
+    const char *txt = lv_textarea_get_text(ta);
+    uint32_t pos = lv_textarea_get_cursor_pos(ta);
+    if (!txt || pos == 0) return false;
+
+    for (size_t i = 0; i < sizeof(k_structural) / sizeof(k_structural[0]); i++) {
+        size_t len = strlen(k_structural[i]);
+        if (pos < len || strncmp(txt + pos - len, k_structural[i], len) != 0) continue;
+
+        char buf[FD_SRC_CAP];
+        size_t head = pos - len;
+        size_t tail = strlen(txt + pos);
+        if (head + tail + 1 > sizeof(buf)) return false;
+        memcpy(buf, txt, head);
+        memcpy(buf + head, txt + pos, tail + 1);
+        lv_textarea_set_text(ta, buf);
+        lv_textarea_set_cursor_pos(ta, (int32_t)head);
+        return true;
+    }
+    return false;
+}
+
 static void insert_text(const char *text)
 {
     if (!g_ta_active) return;
     char buf[32];
-    /* 函数键补上左括号，少按一次。 */
+    bool want_inside = false;
+    /* 函数键插 name() 并把光标放进括号里，少按两次。 */
     if (strcmp(text, "sin") == 0 || strcmp(text, "cos") == 0 ||
         strcmp(text, "tan") == 0 || strcmp(text, "asin") == 0 ||
         strcmp(text, "acos") == 0 || strcmp(text, "atan") == 0 ||
@@ -186,13 +217,16 @@ static void insert_text(const char *text)
         strcmp(text, "ln") == 0 || strcmp(text, "exp") == 0 ||
         strcmp(text, "abs") == 0 || strcmp(text, "floor") == 0 ||
         strcmp(text, "ceil") == 0 || strcmp(text, "round") == 0) {
-        snprintf(buf, sizeof(buf), "%s(", text);
+        snprintf(buf, sizeof(buf), "%s()", text);
+        want_inside = true;
     } else if (strcmp(text, "√") == 0) {
-        snprintf(buf, sizeof(buf), "sqrt(");
+        snprintf(buf, sizeof(buf), "sqrt()");
+        want_inside = true;
     } else {
         snprintf(buf, sizeof(buf), "%s", text);
     }
     lv_textarea_add_text(g_ta_active, buf);
+    if (want_inside) lv_textarea_cursor_left(g_ta_active);
 }
 
 static void refresh_error(void);
@@ -219,7 +253,8 @@ static void key_clicked(lv_event_t *e)
     }
 
     if (strcmp(text, "退") == 0) {
-        lv_textarea_delete_char(g_ta_active);
+        /* 根号 / 绝对值类的空骨架整段删掉，否则会先露出半截括号。 */
+        if (!delete_structural_before(g_ta_active)) lv_textarea_delete_char(g_ta_active);
     } else if (strcmp(text, "清") == 0) {
         lv_textarea_set_text(g_ta_active, "");
     } else {
