@@ -4,7 +4,8 @@
 界面不再是 Jetpack Compose，而是**整屏由 C + LVGL 绘制**，Android 侧只剩一个
 `SurfaceView` 宿主。数学引擎、文档模型、界面、绘制全部在 NDK 里。
 
-当前开发分支为 **`lvgl-main-parity`**；`lvgl` 是合并基线，`main` 保留旧的 Compose 实现。
+当前开发分支为 **`lvgl-working`**；`lvgl` 是合入基线（发布 tag 打在 `lvgl` 线上），
+`main` 保留旧的 Compose 实现（1.2.28）。原先的 `lvgl-main-parity` 已删除。
 
 ```
 y = f(x)       显函数
@@ -19,9 +20,9 @@ F(x, y) = 0    隐函数（marching squares）
 
 | 产物 | 大小 | 说明 |
 |---|---|---|
-| `app/build/outputs/apk/debug/app-debug.apk` | **13,927,732 B（≈13.3 MiB）** | 含 armeabi-v7a / arm64-v8a / x86_64 三个 ABI |
-| `app/build/outputs/apk/release/app-universal-release*.apk` 或 `app-release*.apk` | **11,916,313 B（≈11.4 MiB）** | R8 + 资源压缩，含三个 ABI；`*` 为 `-unsigned`（无签名材料时） |
-| `app-<abi>-release*.apk`（`-PabiSplits`） | **3,789,384–4,150,135 B（≈3.6–4.0 MiB）** | 单 ABI 包，另产出 universal 包 |
+| `app/build/outputs/apk/debug/app-debug.apk` | **13,989,627 B（≈13.3 MiB）** | 含 armeabi-v7a / arm64-v8a / x86_64 三个 ABI |
+| `app/build/outputs/apk/release/app-universal-release*.apk` 或 `app-release*.apk` | **11,967,297 B（≈11.4 MiB）** | R8 + 资源压缩，含三个 ABI；`*` 为 `-unsigned`（无签名材料时），用 debug key 补签后约 11,979,832 B |
+| `app-<abi>-release*.apk`（`-PabiSplits`） | **3,801,964–4,168,351 B（≈3.6–4.0 MiB）** | 单 ABI 包，另产出 universal 包 |
 
 体积的大头是五档中文字库（约 2.9 MiB `.rodata` × 每个 ABI）。表上只用到
 14/16/20 三档，删掉 `font_cn_24/28.c` 可省下约 5 MB（做法见「六、中文字体」）。
@@ -31,12 +32,15 @@ F(x, y) = 0    隐函数（marching squares）
 - `./gradlew :app:assembleDebug :app:assembleRelease` → **BUILD SUCCESSFUL**；
 - 表达式引擎主机测试 **661 项，0 失败**；
 - 特征点分析主机测试 **40 项，0 失败**（另跑过 ASan/UBSan）；
-- 界面冒烟测试：**8 个屏幕全部渲染成功，导出 27 张 PNG**（基准 466×466，含欢迎页与引导遮罩），几何作图 / 存档往返 / 字母键盘 / 曲线点选路径均走通；
+- 界面冒烟测试：**8 个屏幕全部渲染成功，导出 30 张 PNG**（基准 466×466，含欢迎页与引导遮罩），几何作图 / 存档往返 / 字母键盘 / 曲线点选路径均走通；其中 `26_editor_latex` / `27_tour_step3` / `28_tour_step3_armed` 三张专测 LaTeX 提示与引导锁定；
 - Android 9 x86_64 模拟器（TCG，无 KVM）回归：启动、编辑器、列表/参数播放、设置、存档、几何工具、双指缩放、系统返回键均通过。
 
 **尚未在真表上运行过**：表冠、真实触摸采样率、GPU/内存压力仍需真机确认。
 
 版本号：`versionName 1.1` / `versionCode 3`，`minSdk 24` / `targetSdk 34` / `compileSdk 34`。
+
+发布：`beta-0.4`（GitHub Release 附 5 个 APK）。测试包一律用 debug key 做 v1+v2+v3 三签，
+每次重新生成的密钥都不同，**换包要先卸载**，否则装不上。
 
 ---
 
@@ -137,6 +141,17 @@ app/src/main/
 | CMake | `3.22.1` | 同上 |
 | Gradle | 8.7（wrapper） | |
 
+新环境（沙箱 / 新机器）可以用仓库里的脚本一键装齐上面这些：
+
+```bash
+tools/setup-sandbox-toolchain.sh           # 只装工具链
+tools/setup-sandbox-toolchain.sh --build   # 装完顺带构建 release（拆 ABI）+ debug
+```
+
+脚本落地到 `.toolchain/`，默认从腾讯云镜像下载——Google 直连在沙箱里只有约 45 KB/s，
+换镜像后约 39 MB/s。路径、镜像、代理都能用环境变量覆盖
+（`ANDROID_SDK_PATH` / `GRADLE_USER_HOME` / `SDK_MIRROR`）。
+
 本开发环境把 SDK 与 Gradle 缓存放在 `/workspace/.toolchain`（该目录不在版本库里）：
 
 ```bash
@@ -220,8 +235,9 @@ v2 + v3。Android 7 那批只认 JAR 签名的老安装器会装不上，所以�
 
 ### 安装到表上
 
-`tools/` 下保留了三个 Windows 脚本（`install-to-watch.ps1`、`verify-apk.ps1`、
-`sign-release.ps1`），用法与旧版一致：优先装 release 包，手表存储紧张。
+`tools/` 下共四个脚本：三个 Windows 用的（`install-to-watch.ps1`、`verify-apk.ps1`、
+`sign-release.ps1`）用法与旧版一致——优先装 release 包，手表存储紧张；
+另有 `setup-sandbox-toolchain.sh`，用于新环境装工具链（见「四、构建」）。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install-to-watch.ps1
@@ -346,10 +362,12 @@ sed -n 's/.*--symbols \(.*\) -o .*/\1/p' app/src/main/cpp/ui/font_cn_16.c > /tmp
 
 ## 七、界面与操作
 
-共 8 个屏幕（含欢迎页），全部由 `ui.c` 路由。每个屏幕有一个常驻容器：
-切屏只切显隐，只有内容变化（`ui_refresh*` 递增版本号）时才重建该屏，
-所以来回切屏不再整屏 `lv_obj_clean`。重建绘图屏前会先调 `ui_graph_detach()`
-把控件指针置空，但保留像素缓冲区。
+共 8 个屏幕（含欢迎页），全部由 `ui.c` 路由。切屏只切显隐，只有内容变化
+（`ui_refresh*` 递增版本号）时才重建该屏，不再整屏 `lv_obj_clean`。
+
+常驻的容器**最多只留最近用过的 2 屏**（LRU）：7 个屏全常驻会把 LVGL 堆吃满，
+而小屏上真正来回切的通常只有「列表 ↔ 绘图/编辑」这一组。被淘汰的屏销毁容器，
+返回时重建；淘汰绘图屏前先调 `ui_graph_detach()` 把控件指针置空，但保留像素缓冲区。
 
 | 屏幕 | 内容 |
 |---|---|
@@ -361,6 +379,10 @@ sed -n 's/.*--symbols \(.*\) -o .*/\1/p' app/src/main/cpp/ui/font_cn_16.c > /tmp
 | 存档 | 「保存当前」、「导出 PNG」（先弹文件名对话框：文本框 + 字母键盘，默认带时间戳）、存档列表（载入/删） |
 | 设置 | 显示网格、坐标轴、刻度数值、三角函数按角度、表冠缩放、按键缩放栏、函数示例、复平面模式、重看新手引导、采样质量（快/中/高）、复位视图、保存 |
 | 关于 | 版本、许可、绘图模式说明 |
+
+引导共 4 步：绘图区 → 顶部工具条 → 函数列表 → 设置。第 3、4 步要求**真的点一下高亮区域**，
+「先点高亮区」才会变成「下一步」，避免一路点下一步直接跳过；前两步不受限，
+任何时候都可以「跳过」。
 
 ### 设备适配
 
@@ -447,6 +469,22 @@ UI_PX(v) = round(v * scale)
   和旧版 `AlphabetModel` 的语义一致；
 - 删字符用 `退`（数字页与字母页都有），整行清空用符号页的 `清`；
 - 函数键自动补左括号（`sin` → `sin(`），少按一次。
+
+### 数学排版
+
+输入框里不是一串源码，而是用 `ui_math.c` 排成的二维公式（对标 GeoGebra 的输入行观感）：
+
+| 写法 | 排成 |
+|---|---|
+| `a/b` | 分式（分子 / 细线 / 分母，整体在行内垂直居中） |
+| `x^2` / `x_{i}` | 上标 / 下标（小字号 + 偏移，共用一条基线） |
+| `sqrt(x)` / `\sqrt{x}` | 根号（√ 加顶部横线） |
+| `\frac{a}{b}` | 分式 |
+| `\pi` `\theta` `\alpha` `\infty` | π θ α ∞ |
+
+排版层认这些写法，**求值引擎另有一套**：遇到 `\frac`、`\sqrt` 这类还不能求值的命令时，
+编辑器不报红，只给灰度提示「`\xxx` 暂不能求值，已按源码显示；可以继续编辑或改成普通写法」，
+输入内容原样保留——先让人能接着改，而不是把错误糊到脸上。
 
 ### 参数与滑动条
 
@@ -560,6 +598,8 @@ x(B)      B 不是已知点 → 原样保留，由引擎报错
 | 未在真表验证 | 显示驱动、表冠、触摸采样率都只在主机端用内存显示 + 合成事件验证过。 |
 | 隐函数精度 | 靠网格发现零点，比网格还细的特征会漏。设置里提高采样质量可缓解，代价是求值次数上升。 |
 | 中文字库是子集 | 只有 GB2312 一级字库 + ASCII + 常用符号，生僻字显示为空。 |
+| LaTeX 只覆盖子集 | `ui_math.c` 只排分式 / 上下标 / 根号 / 希腊字母，其余命令按原文显示；求值引擎不认 `\` 命令，遇到时只给灰度提示，暂时出不了图。 |
+| 屏幕缓存只留 2 屏 | 从第三次切屏起会销毁最久未用的容器，回到那一屏要重建一次（绘图屏要重画），拿内存换切屏速度。 |
 | 大屏字号上限 | 最大字号 28px，更大屏（>1300px 短边）上比例会停在这一档，文字相对偏小；要再大得生成 32px 字库。 |
 | 参数方程 t 范围 | 编辑器里是预设区间，不能任意输入，也没有「0~2π / −10~10 / R」那排快捷预设。 |
 | 没有交点求解/导数/积分/表格 | 信息卡只到零点、极值、y 截距（`fd_features.c`），曲线之间的交点与导数/积分没有实现。 |
