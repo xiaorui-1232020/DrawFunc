@@ -369,6 +369,48 @@ static void tab_clicked(lv_event_t *e)
 /* 提交                                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 找出表达式里第一个 LaTeX 命令（形如 \frac、\sqrt、\pi）。
+ *
+ * 排版层（ui_math）认这些写法，但求值引擎只认普通表达式，所以这类输入
+ * 不当成「错误」处理：提示「暂不能求值、可继续编辑」，原文一个字都不改。
+ */
+static bool find_latex_command(const char *src, char *cmd, size_t cap)
+{
+    if (!src) return false;
+    for (const char *s = src; *s; s++) {
+        if (*s != '\\') continue;
+        size_t n = 0;
+        if (n + 1 < cap) cmd[n++] = '\\';
+        s++;
+        while (*s && isalpha((unsigned char)*s)) {
+            if (n + 1 < cap) cmd[n++] = *s;
+            s++;
+        }
+        cmd[n] = '\0';
+        return n > 1;
+    }
+    return false;
+}
+
+/** 校验失败时的提示：LaTeX 命令走中性提示，其余照旧报错。 */
+static void set_error_latex_aware(const char *src, const char *msg)
+{
+    if (!g_err) return;
+    char cmd[24];
+    if (find_latex_command(src, cmd, sizeof(cmd))) {
+        char note[160];
+        snprintf(note, sizeof(note),
+                 "%s 暂不能求值，已按源码显示；可以继续编辑或改成普通写法", cmd);
+        lv_obj_set_style_text_color(g_err, lv_color_hex(FD_C_DIM), 0);
+        lv_label_set_text(g_err, note);
+    } else {
+        lv_obj_set_style_text_color(g_err, lv_color_hex(FD_C_DANGER), 0);
+        lv_label_set_text(g_err, msg);
+    }
+    lv_obj_remove_flag(g_err, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void refresh_error(void)
 {
     if (!g_err) return;
@@ -380,18 +422,22 @@ static void refresh_error(void)
     msg[0] = '\0';
 
     const char *t1 = lv_textarea_get_text(g_ta1);
-    bool ok = validate_text(t1 ? t1 : "", c->fn.mode, deg, msg, sizeof(msg));
+    const char *src1 = t1 ? t1 : "";
+    const char *bad = NULL;
+    bool ok = validate_text(src1, c->fn.mode, deg, msg, sizeof(msg));
+    if (!ok) bad = src1;
 
     if (ok && c->fn.mode == FD_PLOT_PARAMETRIC) {
         const char *t2 = g_ta2 ? lv_textarea_get_text(g_ta2) : "";
-        ok = validate_text(t2 ? t2 : "", FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg));
+        if (!t2) t2 = "";
+        ok = validate_text(t2, FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg));
+        if (!ok) bad = t2;
     }
 
     if (ok) {
         lv_obj_add_flag(g_err, LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_label_set_text(g_err, msg);
-        lv_obj_remove_flag(g_err, LV_OBJ_FLAG_HIDDEN);
+        set_error_latex_aware(bad, msg);
     }
 }
 
@@ -415,18 +461,27 @@ static void commit_and_back(void)
     msg[0] = '\0';
 
     const char *t1 = lv_textarea_get_text(g_ta1);
-    if (!validate_text(t1 ? t1 : "", c->fn.mode, deg, msg, sizeof(msg))) {
+    const char *src1 = t1 ? t1 : "";
+    if (!validate_text(src1, c->fn.mode, deg, msg, sizeof(msg))) {
         refresh_error();
-        ui_toast(msg);
+        /* LaTeX 命令只是「还不能求值」，不当成错误信息糊到脸上。 */
+        char cmd[24];
+        ui_toast(find_latex_command(src1, cmd, sizeof(cmd))
+                         ? "LaTeX 命令暂不支持求值，源码已保留"
+                         : msg);
         return;
     }
     if (c->fn.mode == FD_PLOT_PARAMETRIC) {
         const char *t2 = g_ta2 ? lv_textarea_get_text(g_ta2) : "";
-        if (!validate_text(t2 ? t2 : "", FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg))) {
-            ui_toast(msg);
+        if (!t2) t2 = "";
+        if (!validate_text(t2, FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg))) {
+            char cmd[24];
+            ui_toast(find_latex_command(t2, cmd, sizeof(cmd))
+                             ? "LaTeX 命令暂不支持求值，源码已保留"
+                             : msg);
             return;
         }
-        snprintf(c->fn.src2, sizeof(c->fn.src2), "%s", t2 ? t2 : "");
+        snprintf(c->fn.src2, sizeof(c->fn.src2), "%s", t2);
     }
 
     snprintf(c->fn.src1, sizeof(c->fn.src1), "%s", t1 ? t1 : "");

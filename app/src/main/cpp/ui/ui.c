@@ -12,9 +12,14 @@ static ui_screen g_screen = UI_SCR_GRAPH;
 static lv_coord_t g_w = 466;
 static lv_coord_t g_h = 466;
 
-/* 预创建界面：每个屏幕一个常驻容器，只有内容变化（g_gen 变了）才重建。 */
+/* 预创建界面：屏幕容器常驻，只有内容变化（g_gen 变了）才重建。
+ * 但最多只留最近用过的 2 屏（LRU），其余销毁——7 个屏全常驻会把 LVGL 堆吃满，
+ * 而在小屏上真正来回切的通常只有「列表 ↔ 绘图/编辑」这两屏。 */
+#define FD_SCREEN_CACHE 2
 static lv_obj_t *g_screen_obj[UI_SCREEN_COUNT];
 static unsigned g_screen_gen[UI_SCREEN_COUNT];
+static ui_screen g_cache[FD_SCREEN_CACHE]; /**< 最近用过的屏，[0] 最新 */
+static int g_cache_n;
 static unsigned g_gen;
 
 static ui_screen g_pending_screen;
@@ -134,6 +139,42 @@ static void build_screen_into(ui_screen s)
     g_screen_gen[s] = g_gen;
 }
 
+/** 销毁某屏的容器；绘图屏先 detach 静态指针，避免 lv_obj_delete 后悬空。 */
+static void evict_screen(ui_screen s)
+{
+    if (!g_screen_obj[s]) return;
+    if (s == UI_SCR_GRAPH) ui_graph_detach();
+    lv_obj_delete(g_screen_obj[s]);
+    g_screen_obj[s] = NULL;
+    g_screen_gen[s] = 0;
+}
+
+/** 把 s 提到 LRU 队首；队满时淘汰队尾那一屏。 */
+static void cache_touch(ui_screen s)
+{
+    int pos = -1;
+    for (int i = 0; i < g_cache_n; i++) {
+        if (g_cache[i] == s) {
+            pos = i;
+            break;
+        }
+    }
+
+    if (pos >= 0) {
+        for (int i = pos; i > 0; i--) g_cache[i] = g_cache[i - 1];
+        g_cache[0] = s;
+        return;
+    }
+
+    if (g_cache_n == FD_SCREEN_CACHE) {
+        evict_screen(g_cache[FD_SCREEN_CACHE - 1]);
+        g_cache_n--;
+    }
+    for (int i = g_cache_n; i > 0; i--) g_cache[i] = g_cache[i - 1];
+    g_cache[0] = s;
+    g_cache_n++;
+}
+
 static void show_screen(ui_screen s)
 {
     g_screen = s;
@@ -142,6 +183,7 @@ static void show_screen(ui_screen s)
     }
     if (!g_screen_obj[s] || g_screen_gen[s] != g_gen) build_screen_into(s);
     if (g_screen_obj[s]) lv_obj_remove_flag(g_screen_obj[s], LV_OBJ_FLAG_HIDDEN);
+    cache_touch(s);
 }
 
 void ui_refresh(void)
@@ -481,6 +523,7 @@ void ui_deinit(void)
     g_pending_switch = false;
     memset(g_screen_obj, 0, sizeof(g_screen_obj));
     memset(g_screen_gen, 0, sizeof(g_screen_gen));
+    g_cache_n = 0;
 }
 
 /* ------------------------------------------------------------------ */

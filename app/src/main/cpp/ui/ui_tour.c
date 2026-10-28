@@ -9,6 +9,9 @@
 
 static lv_obj_t *g_tour_mask;
 static int g_step = -1;
+/* 本步是否已经「动手点过」高亮区域（只有 require_tap 的步骤才需要）。 */
+static bool g_step_armed;
+static lv_area_t g_hi_area;
 
 static void build_step(void);
 
@@ -18,17 +21,18 @@ typedef struct {
     const char *body;
     int screen;
     int x, y, w, h; /**< 高亮框，0 宽高表示整屏 */
+    bool require_tap; /**< true = 必须点一下高亮区域才能进下一步 */
 } tour_step;
 
 static const tour_step k_steps[] = {
         {"绘图区", "单指拖动平移，双指捏合缩放，双击复位视野。\n旋转表冠也能缩放。",
-         UI_SCR_GRAPH, 0, 96, 0, -80},
+         UI_SCR_GRAPH, 0, 96, 0, -80, false},
         {"顶部工具条", "右上角「工具」里是 16 种作图工具，\n旁边的按钮分别进函数列表、设置和存档。",
-         UI_SCR_GRAPH, 0, 0, 0, 96},
-        {"函数列表", "列表里管理曲线和参数滑动条，\n点行进入编辑器，左滑删除。",
-         UI_SCR_LIST, 12, 50, -12, -60},
-        {"设置", "网格、坐标轴、角度模式、复平面、\n采样质量都在这里，随时可以重看这个引导。",
-         UI_SCR_SETTINGS, 12, 50, -12, -100},
+         UI_SCR_GRAPH, 0, 0, 0, 96, false},
+        {"函数列表", "列表里管理曲线和参数滑动条，\n点行进入编辑器，左滑删除。\n点一下上方的列表区域继续。",
+         UI_SCR_LIST, 12, 50, -12, -60, true},
+        {"设置", "网格、坐标轴、角度模式、复平面、\n采样质量都在这里，随时可以重看这个引导。\n点一下上方的设置区域继续。",
+         UI_SCR_SETTINGS, 12, 50, -12, -100, true},
 };
 
 static const int k_step_count = (int)(sizeof(k_steps) / sizeof(k_steps[0]));
@@ -68,6 +72,22 @@ static void step_skip(lv_event_t *e)
 
 static void step_next(lv_event_t *e);
 
+/** 点遮罩：落在高亮框里才算「动手点过」，然后重建说明卡让按钮可用。 */
+static void mask_clicked(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    if (g_step < 0 || g_step >= k_step_count) return;
+    if (g_step_armed) return;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    if (p.x < g_hi_area.x1 || p.x > g_hi_area.x2) return;
+    if (p.y < g_hi_area.y1 || p.y > g_hi_area.y2) return;
+    g_step_armed = true;
+    build_step();
+}
+
 /** 切屏是延迟执行的，等它落定后再重新盖遮罩。 */
 static void tour_rebuild_cb(lv_timer_t *t)
 {
@@ -96,6 +116,7 @@ static void build_step(void)
     lv_obj_set_style_bg_opa(mask, LV_OPA_50, 0);
     lv_obj_remove_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(mask, mask_clicked, LV_EVENT_CLICKED, NULL);
 
     /* 高亮框：只在遮罩上描一圈亮边，不做真正的挖洞（LVGL 没有遮罩挖洞）。 */
     lv_obj_t *hi = lv_obj_create(mask);
@@ -107,6 +128,13 @@ static void build_step(void)
     if (hh < 1) hh = 1;
     lv_obj_set_size(hi, hw, hh);
     lv_obj_set_pos(hi, UI_PX(st->x), UI_PX(st->y));
+    /* 记下高亮区域（屏幕坐标），供 mask_clicked 判断「点到了没有」。 */
+    g_hi_area.x1 = UI_PX(st->x);
+    g_hi_area.y1 = UI_PX(st->y);
+    g_hi_area.x2 = (lv_coord_t)(g_hi_area.x1 + hw - 1);
+    g_hi_area.y2 = (lv_coord_t)(g_hi_area.y1 + hh - 1);
+    /* 不需要动手的步骤直接算「已点过」；需要动手的保留当前状态（重建时不能清掉）。 */
+    if (!st->require_tap) g_step_armed = true;
     lv_obj_set_style_bg_opa(hi, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(hi, 2, 0);
     lv_obj_set_style_border_color(hi, lv_color_hex(FD_C_ACCENT), 0);
@@ -141,8 +169,9 @@ static void build_step(void)
     lv_obj_set_size(skip, UI_PX(66), UI_PX(32));
     lv_obj_align(skip, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
-    lv_obj_t *next = ui_button(card, g_step == k_step_count - 1 ? "完成" : "下一步",
-                               step_next);
+    const char *next_txt = !g_step_armed ? "先点高亮区"
+                                         : (g_step == k_step_count - 1 ? "完成" : "下一步");
+    lv_obj_t *next = ui_button(card, next_txt, step_next);
     lv_obj_set_size(next, UI_PX(92), UI_PX(32));
     lv_obj_set_style_bg_color(next, lv_color_hex(0x18323C), 0);
     lv_obj_align(next, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
@@ -153,11 +182,16 @@ static void build_step(void)
 static void step_next(lv_event_t *e)
 {
     LV_UNUSED(e);
+    if (!g_step_armed) {
+        ui_toast("先点一下高亮区域");
+        return;
+    }
     if (g_step + 1 >= k_step_count) {
         ui_tour_finish();
         return;
     }
     g_step++;
+    g_step_armed = false; /* 新的一步重新计「动手」 */
     ui_show((ui_screen)k_steps[g_step].screen);
     lv_timer_t *t = lv_timer_create(tour_rebuild_cb, 40, NULL);
     lv_timer_set_repeat_count(t, 1);
@@ -167,6 +201,7 @@ void ui_tour_start(void)
 {
     close_mask();
     g_step = 0;
+    g_step_armed = false;
     ui_show(UI_SCR_GRAPH);
     lv_timer_t *t = lv_timer_create(tour_rebuild_cb, 40, NULL);
     lv_timer_set_repeat_count(t, 1);
