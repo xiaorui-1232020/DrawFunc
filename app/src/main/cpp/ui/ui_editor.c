@@ -488,6 +488,8 @@ static void commit_and_back(void)
     model_sync_sliders();
     model_checkpoint();
     model_save();
+    /* 列表屏可能已被缓存，模型变了必须让它下次显示时重建，否则预览是旧表达式。 */
+    ui_invalidate(UI_SCR_LIST);
     ui_show(UI_SCR_LIST);
 }
 

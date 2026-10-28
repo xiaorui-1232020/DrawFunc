@@ -52,6 +52,11 @@ void ui_archive_close_dialog(void)
     }
 }
 
+bool ui_archive_dialog_open(void)
+{
+    return g_dlg != NULL;
+}
+
 static void dlg_cancel(lv_event_t *e)
 {
     LV_UNUSED(e);
