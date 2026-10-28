@@ -213,6 +213,14 @@ void ui_refresh_later(void)
     lv_timer_set_repeat_count(g_refresh_timer, 1);
 }
 
+void ui_invalidate(ui_screen s)
+{
+    if ((int)s < 0 || (int)s >= UI_SCREEN_COUNT) return;
+    /* 直接丢弃缓存对象，下次 show_screen 会重新 build；
+       只清 generation 不够（g_gen 初始就是 0）。 */
+    evict_screen(s);
+}
+
 static void pending_timer_cb(lv_timer_t *t)
 {
     lv_timer_delete(t);
@@ -549,6 +557,11 @@ bool ui_key(int code)
 {
     /* 4 = KEYCODE_BACK */
     if (code == 4) {
+        /* 导出命名对话框是 layer_top 上的浮层，先关它，别把底下的屏切走。 */
+        if (ui_archive_dialog_open()) {
+            ui_archive_close_dialog();
+            return true;
+        }
         switch (g_screen) {
             case UI_SCR_GRAPH:
                 return false;

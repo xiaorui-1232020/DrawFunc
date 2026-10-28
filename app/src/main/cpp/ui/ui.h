@@ -47,6 +47,8 @@ ui_screen ui_current(void);
 /** 状态变化后重建当前界面。 */
 void ui_refresh(void);
 void ui_refresh_later(void);
+/** 把某屏标记为过期，下次切到它时重建（不立刻切屏）。 */
+void ui_invalidate(ui_screen s);
 
 void ui_touch(int action, int count, float x0, float y0, float x1, float y1);
 void ui_crown(float delta);
@@ -98,6 +100,8 @@ bool ui_graph_export_png(const char *title, char *out_path, size_t cap);
 /** 存档页的「导出 PNG」命名对话框（冒烟测试也会直接调）。 */
 void ui_archive_open_export_dialog(void);
 void ui_archive_close_dialog(void);
+/** 导出命名对话框是否还开着（返回键要优先关它）。 */
+bool ui_archive_dialog_open(void);
 /** 切屏前调用：LVGL 对象会被销毁，这里把它们置空，但保留像素缓冲区。 */
 void ui_graph_detach(void);
 

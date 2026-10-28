@@ -881,12 +881,17 @@ int model_archive_list(fd_archive_entry *out, int cap)
         char title[48] = "";
         char *text = read_text_file(path, NULL);
         if (text) {
-            char first[128];
-            snprintf(first, sizeof(first), "%s", text);
-            char *f[4];
-            if (split_tabs(first, f, 4) >= 2 && strcmp(f[0], "meta") == 0) {
-                snprintf(title, sizeof(title), "%s", f[1]);
-                sb_unescape(title);
+            /* meta 是文件里的第二行；整块 text 直接 split_tabs 会把
+               "FD1\nmeta" 当成第一列，永远匹配不上，结果标题退化成文件名。 */
+            char *save = NULL;
+            for (char *line = strtok_r(text, "\n", &save); line;
+                 line = strtok_r(NULL, "\n", &save)) {
+                char *f[2];
+                if (split_tabs(line, f, 2) >= 2 && strcmp(f[0], "meta") == 0) {
+                    snprintf(title, sizeof(title), "%s", f[1]);
+                    sb_unescape(title);
+                    break;
+                }
             }
             free(text);
         }
