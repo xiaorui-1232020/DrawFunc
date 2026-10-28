@@ -14,7 +14,8 @@
 # 可用环境变量覆盖：
 #   ANDROID_SDK_PATH   工具链落地目录，默认 <仓库根>/.toolchain/android-sdk
 #   GRADLE_USER_HOME   Gradle 缓存目录，默认 <仓库根>/.toolchain/gradle-home
-#   SDK_MIRROR         下载镜像，默认腾讯云（Google 直连在国内/沙箱常只有几十 KB/s）
+#   SDK_MIRROR         SDK 组件镜像，默认腾讯云（Google 直连在国内/沙箱常只有几十 KB/s）
+#   GRADLE_MIRROR      Gradle 分发包镜像，默认腾讯云；官方源会 307 到 GitHub，容易 404
 #   JAVA_HOME          JDK 17，未设置时尝试用 PATH 里的 java
 #
 # 注意：Gradle 与 AGP 不读 http_proxy 环境变量，如果出网要走代理，
@@ -29,8 +30,8 @@ GH=${GRADLE_USER_HOME:-$REPO_ROOT/.toolchain/gradle-home}
 MIRROR=${SDK_MIRROR:-https://mirrors.cloud.tencent.com/AndroidSDK}
 TMP=${TMPDIR:-/tmp}/fd-sdk-pkg
 
-# 与 Gradle 8.7 的 wrapper 哈希目录保持一致，见 gradle/wrapper/gradle-wrapper.properties
-GRADLE_DIST_VER=gradle-8.7
+# 与 gradle/wrapper/gradle-wrapper.properties 里的 distributionUrl 保持一致
+GRADLE_DIST=gradle-8.7-bin
 GRADLE_DIST_HASH=bhs2wmbdwecv87pi65oeuq5iu
 
 PKGS=(
@@ -43,17 +44,34 @@ PKGS=(
 
 log() { printf '\n>>> %s\n' "$*"; }
 
+# fetch <目标文件> <url...>：逐个源试，文件非空且能通过校验才算成功。
+fetch() {
+  local out=$1
+  shift
+  local url
+  for url in "$@"; do
+    echo "    尝试 $url"
+    if curl -fL --retry 2 --connect-timeout 20 -o "$out" "$url" && [ -s "$out" ]; then
+      return 0
+    fi
+    rm -f "$out"
+  done
+  return 1
+}
+
 mkdir -p "$SDK"/{platforms,build-tools,cmake,ndk} "$GH" "$TMP"
 
-log "下载 SDK 组件（$MIRROR）"
+log "下载 SDK 组件"
 cd "$TMP"
+GOOGLE=https://dl.google.com/android/repository
 for f in "${PKGS[@]}"; do
   if [ -s "$f" ]; then
     echo "    已有 $f"
-  else
-    echo "    下载 $f"
-    curl -fL --retry 3 -o "$f" "$MIRROR/$f"
+    continue
   fi
+  echo "    下载 $f"
+  # 镜像优先（快），失败再退回 Google 官方（慢但稳）
+  fetch "$f" "$MIRROR/$f" "$GOOGLE/$f" || { echo "下载失败：$f" >&2; exit 1; }
 done
 
 log "解包到 $SDK"
@@ -83,13 +101,29 @@ if [ ! -d "$SDK/ndk/27.2.12479018" ]; then
 fi
 
 log "准备 Gradle 分发包"
-DIST="$GH/wrapper/dists/$GRADLE_DIST_VER/$GRADLE_DIST_HASH"
-if [ ! -f "$DIST/$GRADLE_DIST_VER.zip.ok" ]; then
+DIST="$GH/wrapper/dists/$GRADLE_DIST/$GRADLE_DIST_HASH"
+if [ ! -f "$DIST/$GRADLE_DIST.zip.ok" ]; then
   mkdir -p "$DIST"
-  curl -fL --retry 3 -o "$DIST/$GRADLE_DIST_VER.zip" \
-    "https://services.gradle.org/distributions/$GRADLE_DIST_VER.zip"
-  unzip -q -t "$DIST/$GRADLE_DIST_VER.zip" >/dev/null # 先校验压缩包完整
-  touch "$DIST/$GRADLE_DIST_VER.zip.ok"
+  ZIP="$DIST/$GRADLE_DIST.zip"
+  # services.gradle.org 现在 307 跳到 GitHub Release 资源，那条链路经常被限流/404，
+  # 所以按「官方 → 直连下载站 → 国内镜像」的顺序依次试。
+  if fetch "$ZIP" \
+      "https://services.gradle.org/distributions/$GRADLE_DIST.zip" \
+      "https://downloads.gradle.org/distributions/$GRADLE_DIST.zip" \
+      "${GRADLE_MIRROR:-https://mirrors.cloud.tencent.com/gradle}/$GRADLE_DIST.zip" &&
+     unzip -q -t "$ZIP" >/dev/null 2>&1; then
+    touch "$DIST/$GRADLE_DIST.zip.ok"
+  else
+    cat >&2 <<EOF
+
+Gradle 分发包下载失败（三个源都不可用）。
+手工补救：把 $GRADLE_DIST.zip 放到
+  $DIST/
+然后执行
+  touch $DIST/$GRADLE_DIST.zip.ok
+EOF
+    exit 1
+  fi
 fi
 
 # Gradle 只认 systemProp.*，不吃 http_proxy 环境变量
