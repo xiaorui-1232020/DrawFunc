@@ -408,7 +408,10 @@ static const preset_def k_presets[] = {
 
 static void preset_clicked(lv_event_t *e)
 {
-    const preset_def *p = (const preset_def *)lv_event_get_user_data(e);
+    /* 预设参数挂在按钮对象上（small_button 里 set_user_data），
+       不是注册回调时传给 lv_obj_add_event_cb 的事件 user_data（那里是 NULL）。 */
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    const preset_def *p = (const preset_def *)lv_obj_get_user_data(btn);
     if (!p) return;
     if (model()->curve_count >= FD_MAX_CURVES) {
         ui_toast("曲线数量已达上限");
