@@ -18,6 +18,7 @@
 #include "model.h"
 #include "src/libs/lodepng/lodepng.h"
 #include "ui.h"
+#include "ui_tour.h"
 
 /* 屏幕尺寸：默认按 466×466 圆表，可用 -DFD_W= / -DFD_H= 覆盖来验证其它设备。 */
 #ifndef FD_W
@@ -208,6 +209,14 @@ int main(int argc, char **argv)
         }
         if (missing) printf("FONT MISSING %d\n", missing);
     }
+
+    /* 首次启动：欢迎页 + 引导第 1 步 + 收尾（会把 tutorial_done 写进文档） */
+    dump("00_welcome");
+    ui_tour_start();
+    pump(12);
+    dump("00_tour_step1");
+    ui_tour_finish();
+    pump(6);
 
     dump("01_graph");
 

@@ -21,6 +21,7 @@
 #include "../src/subst.h"
 #include "geo.h"
 #include "model.h"
+#include "ui_math.h"
 
 /* lodepng 是 LVGL 自带的，编译在 lvgl 静态库里。 */
 #include "src/libs/lodepng/lodepng.h"
@@ -61,6 +62,9 @@ static lv_obj_t *g_zoom_slider;
 static float g_zoom_depth; /**< 滑轨当前相对位移，-1..1 */
 
 static uint32_t *g_px;
+/* 工具面板背后的模糊画布（实现见文件末尾附近） */
+static lv_obj_t *g_blur_canvas;
+static void show_panel_backdrop(bool show);
 static int g_stride_px;
 static int g_w, g_h;
 
@@ -928,7 +932,7 @@ static void update_card(void)
     } else {
         snprintf(buf, sizeof(buf), "%s", c->fn.src1);
     }
-    lv_label_set_text(g_card_expr, buf);
+    ui_math_set_text(g_card_expr, buf, FD_C_DIM);
 
     if (model()->settings.complex_plane) {
         fd_expr_error err;
@@ -1946,6 +1950,7 @@ void ui_graph_detach(void)
     g_play_dir = 1;
     g_root = NULL;
     g_canvas = NULL;
+    g_blur_canvas = NULL;
     g_numbers = NULL;
     g_card = NULL;
     g_card_dot = NULL;
@@ -2133,19 +2138,26 @@ static void tool_chip_clicked(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (g_panel) lv_obj_add_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    show_panel_backdrop(false);
     tool_set((fd_tool)idx);
 }
 
 static void tools_clicked(lv_event_t *e)
 {
     LV_UNUSED(e);
-    if (g_panel) lv_obj_remove_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    if (g_panel) {
+        show_panel_backdrop(true);
+        lv_obj_remove_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void panel_close_clicked(lv_event_t *e)
 {
     LV_UNUSED(e);
-    if (g_panel) lv_obj_add_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    if (g_panel) {
+        lv_obj_add_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+        show_panel_backdrop(false);
+    }
 }
 
 static void clear_geo_clicked(lv_event_t *e)
@@ -2215,6 +2227,152 @@ static void build_hint(lv_obj_t *parent)
     lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* ------------------------------------------------------------------ */
+/* 工具面板背后的毛玻璃                                                 */
+/* ------------------------------------------------------------------ */
+
+static uint32_t *g_blur_px;
+static int g_blur_w, g_blur_h, g_blur_stride;
+
+static void ensure_blur_buffer(int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    if (g_blur_px && w == g_blur_w && h == g_blur_h) return;
+    free(g_blur_px);
+    g_blur_px = (uint32_t *)calloc(1, (size_t)w * (size_t)h * 4u + 64u);
+    if (!g_blur_px) {
+        g_blur_w = g_blur_h = 0;
+        return;
+    }
+    g_blur_w = w;
+    g_blur_h = h;
+    g_blur_stride = w;
+}
+
+static void blur_h(const uint32_t *src, int w, int h, int sstride, uint32_t *dst,
+                   int dstride, int r)
+{
+    for (int y = 0; y < h; y++) {
+        const uint32_t *row = src + (size_t)y * sstride;
+        uint32_t *out = dst + (size_t)y * dstride;
+        uint32_t sb = 0, sg = 0, srr = 0;
+        int cnt = 0;
+        for (int x = 0; x <= r && x < w; x++) {
+            uint32_t c = row[x];
+            sb += c & 0xFFu;
+            sg += (c >> 8) & 0xFFu;
+            srr += (c >> 16) & 0xFFu;
+            cnt++;
+        }
+        for (int x = 0; x < w; x++) {
+            out[x] = 0xFF000000u | ((srr / (uint32_t)cnt) << 16) |
+                     ((sg / (uint32_t)cnt) << 8) | (sb / (uint32_t)cnt);
+            int add = x + r + 1;
+            int rem = x - r;
+            if (add < w) {
+                uint32_t c = row[add];
+                sb += c & 0xFFu;
+                sg += (c >> 8) & 0xFFu;
+                srr += (c >> 16) & 0xFFu;
+                cnt++;
+            }
+            if (rem >= 0) {
+                uint32_t c = row[rem];
+                sb -= c & 0xFFu;
+                sg -= (c >> 8) & 0xFFu;
+                srr -= (c >> 16) & 0xFFu;
+                cnt--;
+            }
+        }
+    }
+}
+
+static void blur_v(const uint32_t *src, int w, int h, int sstride, uint32_t *dst,
+                   int dstride, int r)
+{
+    for (int x = 0; x < w; x++) {
+        uint32_t sb = 0, sg = 0, srr = 0;
+        int cnt = 0;
+        for (int y = 0; y <= r && y < h; y++) {
+            uint32_t c = src[(size_t)y * sstride + x];
+            sb += c & 0xFFu;
+            sg += (c >> 8) & 0xFFu;
+            srr += (c >> 16) & 0xFFu;
+            cnt++;
+        }
+        for (int y = 0; y < h; y++) {
+            dst[(size_t)y * dstride + x] = 0xFF000000u |
+                    ((srr / (uint32_t)cnt) << 16) | ((sg / (uint32_t)cnt) << 8) |
+                    (sb / (uint32_t)cnt);
+            int add = y + r + 1;
+            int rem = y - r;
+            if (add < h) {
+                uint32_t c = src[(size_t)add * sstride + x];
+                sb += c & 0xFFu;
+                sg += (c >> 8) & 0xFFu;
+                srr += (c >> 16) & 0xFFu;
+                cnt++;
+            }
+            if (rem >= 0) {
+                uint32_t c = src[(size_t)rem * sstride + x];
+                sb -= c & 0xFFu;
+                sg -= (c >> 8) & 0xFFu;
+                srr -= (c >> 16) & 0xFFu;
+                cnt--;
+            }
+        }
+    }
+}
+
+/** 把绘图画布的内容模糊一份写进背景 canvas（面板打开时调一次）。 */
+static void refresh_panel_backdrop(void)
+{
+    if (!g_blur_canvas || !g_px || !g_blur_px) return;
+    int w = g_w;
+    int h = g_h;
+    if (w <= 0 || h <= 0) return;
+    uint32_t *tmp = (uint32_t *)malloc((size_t)w * (size_t)h * 4u);
+    if (!tmp) return;
+    int r = UI_PX(6);
+    if (r < 1) r = 1;
+    blur_h(g_px, w, h, g_stride_px, tmp, w, r);
+    blur_v(tmp, w, h, w, g_blur_px, g_blur_stride, r);
+    free(tmp);
+    lv_obj_invalidate(g_blur_canvas);
+}
+
+static void build_panel_backdrop(lv_obj_t *parent)
+{
+    ensure_blur_buffer(g_w, g_h);
+    lv_obj_t *cv = lv_canvas_create(parent);
+    g_blur_canvas = cv;
+    lv_obj_set_pos(cv, 0, 0);
+    lv_obj_remove_flag(cv, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cv, LV_OBJ_FLAG_SCROLLABLE);
+    if (g_blur_px) {
+        lv_canvas_set_buffer(cv, g_blur_px, g_w, g_h, LV_COLOR_FORMAT_ARGB8888);
+        lv_draw_buf_t *db = lv_canvas_get_draw_buf(cv);
+        if (db && db->data) {
+            g_blur_px = (uint32_t *)db->data;
+            g_blur_stride = (int)(db->header.stride / 4u);
+        } else {
+            g_blur_stride = g_w;
+        }
+    }
+    lv_obj_add_flag(cv, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_panel_backdrop(bool show)
+{
+    if (!g_blur_canvas) return;
+    if (show) {
+        refresh_panel_backdrop();
+        lv_obj_remove_flag(g_blur_canvas, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(g_blur_canvas, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void build_tool_panel(lv_obj_t *parent)
 {
     lv_obj_t *p = lv_obj_create(parent);
@@ -2223,7 +2381,8 @@ static void build_tool_panel(lv_obj_t *parent)
     lv_obj_set_size(p, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(p, 0, 0);
     lv_obj_set_style_bg_color(p, lv_color_hex(FD_C_BG), 0);
-    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    /* 半透明 + 背后的模糊画布 = 毛玻璃面板。 */
+    lv_obj_set_style_bg_opa(p, LV_OPA_80, 0);
     lv_obj_set_style_pad_all(p, UI_PX(12), 0);
     lv_obj_set_style_pad_row(p, UI_PX(6), 0);
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
@@ -2392,12 +2551,8 @@ static void build_card(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_card_name, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(g_card_name, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(6));
 
-    g_card_expr = lv_label_create(card);
-    lv_label_set_text(g_card_expr, "sin(x)");
-    lv_label_set_long_mode(g_card_expr, LV_LABEL_LONG_DOT);
+    g_card_expr = ui_math_create(card, "sin(x)", FD_C_DIM);
     lv_obj_set_width(g_card_expr, UI_PX(198));
-    lv_obj_set_style_text_font(g_card_expr, ui_font_small(), 0);
-    lv_obj_set_style_text_color(g_card_expr, lv_color_hex(FD_C_DIM), 0);
     lv_obj_align(g_card_expr, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(28));
 
     g_card_err = lv_label_create(card);
@@ -2488,7 +2643,8 @@ lv_obj_t *ui_graph_create(lv_obj_t *parent)
     build_zoom_bar(g_root);
     build_card(g_root);
     build_hint(g_root);
-    /* 工具面板是全屏浮层，最后建才能盖在其它控件之上。 */
+    /* 工具面板是全屏浮层，最后建才能盖在其它控件之上；模糊背景在它下面。 */
+    build_panel_backdrop(g_root);
     build_tool_panel(g_root);
 
     g_tool = FD_TOOL_MOVE;

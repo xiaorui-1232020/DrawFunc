@@ -36,6 +36,7 @@ typedef struct {
     bool show_zoom_bar; /**< 底部「− 滑动条 ＋」缩放栏（默认关） */
     bool show_presets; /**< 列表里的「示例」块（默认开） */
     bool complex_plane; /**< 复平面模式：曲线表达式按复数求值，结果画成点 */
+    bool tutorial_done; /**< 新手引导是否已完成（首次启动展示欢迎页） */
 } fd_settings;
 
 typedef struct {

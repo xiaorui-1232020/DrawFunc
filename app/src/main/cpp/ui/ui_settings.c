@@ -4,11 +4,18 @@
 #include <stdint.h>
 
 #include "model.h"
+#include "ui_tour.h"
 
 static void back_clicked(lv_event_t *e)
 {
     LV_UNUSED(e);
     ui_show(UI_SCR_GRAPH);
+}
+
+static void tutorial_clicked(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    ui_tour_start();
 }
 
 static void grid_changed(lv_event_t *e)
@@ -156,6 +163,14 @@ lv_obj_t *ui_settings_create(lv_obj_t *parent)
     ui_switch_row(root, "函数示例", st->show_presets, presets_changed);
     ui_switch_row(root, "复平面模式", st->complex_plane, complex_changed);
 
+    lv_obj_t *tour = ui_button(root, "重看新手引导", tutorial_clicked);
+    lv_obj_set_size(tour, LV_PCT(100), UI_PX(34));
+    lv_obj_set_style_bg_opa(tour, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(tour, 1, 0);
+    lv_obj_set_style_border_color(tour, lv_color_hex(0x2E3C4A), 0);
+    lv_obj_t *tl = lv_obj_get_child(tour, 0);
+    if (tl) lv_obj_set_style_text_color(tl, lv_color_hex(FD_C_ACCENT), 0);
+
     lv_obj_t *qrow = lv_obj_create(root);
     lv_obj_remove_style_all(qrow);
     lv_obj_set_size(qrow, LV_PCT(100), UI_PX(40));
@@ -191,7 +206,6 @@ lv_obj_t *ui_settings_create(lv_obj_t *parent)
 
     lv_obj_t *reset = ui_button(foot, "复位视图", reset_clicked);
     lv_obj_set_size(reset, UI_PX(130), UI_PX(36));
-
     lv_obj_t *save = ui_button(foot, "保存", autosave_clicked);
     lv_obj_set_size(save, UI_PX(100), UI_PX(36));
     lv_obj_set_style_bg_color(save, lv_color_hex(0x18323C), 0);

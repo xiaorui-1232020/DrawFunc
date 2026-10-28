@@ -5,11 +5,17 @@
 
 #include "model.h"
 #include "app.h"
+#include "ui_tour.h"
 
 static lv_obj_t *g_root;
 static ui_screen g_screen = UI_SCR_GRAPH;
 static lv_coord_t g_w = 466;
 static lv_coord_t g_h = 466;
+
+/* 预创建界面：每个屏幕一个常驻容器，只有内容变化（g_gen 变了）才重建。 */
+static lv_obj_t *g_screen_obj[UI_SCREEN_COUNT];
+static unsigned g_screen_gen[UI_SCREEN_COUNT];
+static unsigned g_gen;
 
 static ui_screen g_pending_screen;
 static bool g_pending_switch;
@@ -99,21 +105,43 @@ static lv_obj_t *build_screen(ui_screen s, lv_obj_t *parent)
         case UI_SCR_ARCHIVE: return ui_archive_create(parent);
         case UI_SCR_SETTINGS: return ui_settings_create(parent);
         case UI_SCR_ABOUT: return ui_about_create(parent);
+        case UI_SCR_WELCOME: return ui_welcome_create(parent);
         default: return NULL;
     }
 }
 
-static void build_current(void)
+/**
+ * 建/重建某个屏幕的容器内容。
+ * 重建前先 detach 绘图屏的静态指针，避免 lv_obj_clean 之后悬空。
+ */
+static void build_screen_into(ui_screen s)
 {
     if (!g_root) return;
-    /* 绘图屏的 LVGL 对象马上会被销毁，先断开静态引用，避免悬空。 */
-    ui_graph_detach();
-    lv_obj_clean(g_root);
-    lv_obj_set_style_bg_color(g_root, lv_color_hex(FD_C_BG), 0);
-    lv_obj_set_style_bg_opa(g_root, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(g_root, lv_color_hex(FD_C_TEXT), 0);
-    lv_obj_set_style_text_font(g_root, ui_font_body(), 0);
-    build_screen(g_screen, g_root);
+    lv_obj_t *c = g_screen_obj[s];
+    if (c) {
+        if (s == UI_SCR_GRAPH) ui_graph_detach();
+        lv_obj_clean(c);
+    } else {
+        c = lv_obj_create(g_root);
+        lv_obj_remove_style_all(c);
+        lv_obj_set_size(c, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_pad_all(c, 0, 0);
+        lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+        g_screen_obj[s] = c;
+    }
+    build_screen(s, c);
+    g_screen_gen[s] = g_gen;
+}
+
+static void show_screen(ui_screen s)
+{
+    g_screen = s;
+    for (int i = 0; i < UI_SCREEN_COUNT; i++) {
+        if (g_screen_obj[i]) lv_obj_add_flag(g_screen_obj[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (!g_screen_obj[s] || g_screen_gen[s] != g_gen) build_screen_into(s);
+    if (g_screen_obj[s]) lv_obj_remove_flag(g_screen_obj[s], LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_refresh(void)
@@ -122,14 +150,18 @@ void ui_refresh(void)
         lv_timer_delete(g_refresh_timer);
         g_refresh_timer = NULL;
     }
-    build_current();
+    g_gen++;
+    build_screen_into(g_screen);
+    if (g_screen_obj[g_screen]) {
+        lv_obj_remove_flag(g_screen_obj[g_screen], LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void refresh_timer_cb(lv_timer_t *t)
 {
     lv_timer_delete(t);
     g_refresh_timer = NULL;
-    build_current();
+    ui_refresh();
 }
 
 void ui_refresh_later(void)
@@ -144,8 +176,7 @@ static void pending_timer_cb(lv_timer_t *t)
     lv_timer_delete(t);
     if (!g_pending_switch) return;
     g_pending_switch = false;
-    g_screen = g_pending_screen;
-    build_current();
+    show_screen(g_pending_screen);
 }
 
 void ui_show(ui_screen s)
@@ -241,6 +272,8 @@ lv_obj_t *ui_label(lv_obj_t *parent, const char *text, uint32_t color)
     return l;
 }
 
+static void glass_style(lv_obj_t *b);
+
 lv_obj_t *ui_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(parent);
@@ -251,8 +284,8 @@ lv_obj_t *ui_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(b, UI_PX(14), 0);
     lv_obj_set_style_pad_hor(b, UI_PX(14), 0);
-    lv_obj_set_style_border_width(b, 0, 0);
     lv_obj_set_style_text_font(b, ui_font_body(), 0);
+    glass_style(b);
 
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
@@ -264,13 +297,106 @@ lv_obj_t *ui_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
     return b;
 }
 
+/* ------------------------------------------------------------------ */
+/* 毛玻璃 + 长按提示圈                                                  */
+/* ------------------------------------------------------------------ */
+
+/** 半透明 + 细亮边 + 极淡投影，做出「磨砂玻璃」的观感。 */
+static void glass_style(lv_obj_t *b)
+{
+    lv_obj_set_style_bg_opa(b, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(0x3E4C5C), 0);
+    lv_obj_set_style_border_opa(b, LV_OPA_60, 0);
+    lv_obj_set_style_shadow_width(b, UI_PX(8), 0);
+    lv_obj_set_style_shadow_color(b, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(b, LV_OPA_20, 0);
+    lv_obj_set_style_shadow_ofs_y(b, UI_PX(2), 0);
+}
+
+static lv_obj_t *g_ring;
+static lv_timer_t *g_ring_timer;
+static uint32_t g_ring_t0;
+
+static void ring_stop(void)
+{
+    if (g_ring_timer) {
+        lv_timer_delete(g_ring_timer);
+        g_ring_timer = NULL;
+    }
+    if (g_ring) {
+        lv_obj_delete(g_ring);
+        g_ring = NULL;
+    }
+}
+
+static void ring_timer_cb(lv_timer_t *t)
+{
+    if (!g_ring) {
+        lv_timer_delete(t);
+        g_ring_timer = NULL;
+        return;
+    }
+    uint32_t el = lv_tick_elaps(g_ring_t0);
+    int a = (int)((el * 360u) / 700u);
+    if (a > 360) a = 360;
+    lv_arc_set_end_angle(g_ring, a);
+    if (a >= 360) {
+        lv_timer_delete(t);
+        g_ring_timer = NULL;
+    }
+}
+
+static void ring_pressed(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    ring_stop();
+
+    lv_area_t a;
+    lv_obj_get_coords(btn, &a);
+    int pad = UI_PX(5);
+    lv_obj_t *arc = lv_arc_create(lv_layer_top());
+    g_ring = arc;
+    lv_obj_remove_style_all(arc);
+    lv_obj_set_size(arc, (a.x2 - a.x1 + 1) + pad * 2, (a.y2 - a.y1 + 1) + pad * 2);
+    lv_obj_set_pos(arc, a.x1 - pad, a.y1 - pad);
+    lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(arc, LV_OBJ_FLAG_SCROLLABLE);
+    lv_arc_set_bg_angles(arc, 0, 360);
+    lv_arc_set_angles(arc, 0, 0);
+    lv_obj_set_style_arc_width(arc, UI_PX(3), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(0x2E3C4A), LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, UI_PX(3), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(FD_C_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
+
+    g_ring_t0 = lv_tick_get();
+    g_ring_timer = lv_timer_create(ring_timer_cb, 33, NULL);
+}
+
+static void ring_released(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    ring_stop();
+}
+
+/** 图标键按下时绕一圈动画，松手 / 长按触发后收掉。 */
+static void ring_attach(lv_obj_t *b)
+{
+    lv_obj_add_event_cb(b, ring_pressed, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(b, ring_released, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(b, ring_released, LV_EVENT_PRESS_LOST, NULL);
+    lv_obj_add_event_cb(b, ring_released, LV_EVENT_LONG_PRESSED, NULL);
+}
+
 lv_obj_t *ui_icon_button(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
     lv_obj_set_size(b, UI_PX(42), UI_PX(42));
     lv_obj_set_style_bg_color(b, lv_color_hex(FD_C_PANEL2), 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_80, 0);
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(b, 0, 0);
     lv_obj_set_style_text_font(b, ui_font_body(), 0);
@@ -280,6 +406,8 @@ lv_obj_t *ui_icon_button(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb)
     lv_obj_set_style_text_color(l, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_set_style_text_font(l, ui_font_body(), 0);
     lv_obj_center(l);
+    glass_style(b);
+    ring_attach(b);
 
     if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
     return b;
@@ -326,9 +454,16 @@ void ui_init(void)
     lv_obj_set_size(g_root, g_w, g_h);
     lv_obj_set_style_bg_color(g_root, lv_color_hex(FD_C_BG), 0);
     lv_obj_set_style_bg_opa(g_root, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(g_root, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_set_style_text_font(g_root, ui_font_body(), 0);
     lv_obj_remove_flag(g_root, LV_OBJ_FLAG_SCROLLABLE);
-    build_current();
+
+    memset(g_screen_obj, 0, sizeof(g_screen_obj));
+    memset(g_screen_gen, 0, sizeof(g_screen_gen));
+    g_gen = 0;
+
+    /* 首次启动先看欢迎页，之后直接进绘图屏。 */
+    show_screen(model()->settings.tutorial_done ? UI_SCR_GRAPH : UI_SCR_WELCOME);
 }
 
 void ui_deinit(void)
@@ -344,6 +479,8 @@ void ui_deinit(void)
     g_toast_obj = NULL;
     g_root = NULL;
     g_pending_switch = false;
+    memset(g_screen_obj, 0, sizeof(g_screen_obj));
+    memset(g_screen_gen, 0, sizeof(g_screen_gen));
 }
 
 /* ------------------------------------------------------------------ */
@@ -352,6 +489,7 @@ void ui_deinit(void)
 
 void ui_touch(int action, int count, float x0, float y0, float x1, float y1)
 {
+    if (ui_tour_active()) return; /* 引导遮罩期间不让绘图手势穿透 */
     if (g_screen == UI_SCR_GRAPH) {
         ui_graph_touch(action, count, x0, y0, x1, y1);
     }
