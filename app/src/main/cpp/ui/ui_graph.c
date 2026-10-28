@@ -21,6 +21,7 @@
 #include "../src/subst.h"
 #include "geo.h"
 #include "model.h"
+#include "ui_math.h"
 
 /* lodepng 是 LVGL 自带的，编译在 lvgl 静态库里。 */
 #include "src/libs/lodepng/lodepng.h"
@@ -61,6 +62,9 @@ static lv_obj_t *g_zoom_slider;
 static float g_zoom_depth; /**< 滑轨当前相对位移，-1..1 */
 
 static uint32_t *g_px;
+/* 工具面板背后的模糊画布（实现见文件末尾附近） */
+static lv_obj_t *g_blur_canvas;
+static void show_panel_backdrop(bool show);
 static int g_stride_px;
 static int g_w, g_h;
 
@@ -70,6 +74,10 @@ static bool g_plot_valid;
 /* 参数滑动条播放 */
 static lv_timer_t *g_play_timer;
 static int g_play_dir = 1;
+/** 正在被手指拖动的几何点 id（0 = 没有）。 */
+static int g_drag_point_id;
+/** 本次按下已经在 DOWN 里提交过工具点，抬手时不再重复。 */
+static bool g_tool_down_committed;
 static bool g_force_fast;
 
 /* 手势 */
@@ -347,6 +355,33 @@ static void draw_grid_and_axes(const fd_viewport *vp, const fd_settings *st)
     uint32_t grid_c = rgb(FD_C_GRID);
     uint32_t axis_c = rgb(FD_C_AXIS);
 
+    /* ---- 刻度数字的摆放（对齐 main 1.2.28）----
+     *
+     * 横轴数字跟着 x 轴走：想去的高度是「轴下方 1.15 行」，再连续夹进可用区
+     * [safe, h - safe - 行高]。轴从上缘滑出去时停在顶部、从下缘滑出去时停在底部，
+     * 全程连续，不会再出现「数字从上面瞬移到底部」。
+     * 纵轴数字右对齐骑在 y 轴左侧，纵向定义域铺满整屏（底部也能显示）。
+     * 只有「横轴贴底 + 纵轴贴左」时两排数字才会抢左下角，那里用一条过
+     * (safe, h - safe) 的 45° 对角线划开：横轴数字留在右下、纵轴数字留在左上。
+     */
+    const float safe = (float)UI_PX(8);
+    const lv_font_t *f = ui_font_small();
+    const float line_h = (float)f->line_height;
+    const float w = (float)g_w;
+    const float h = (float)g_h;
+
+    float axis_y = fd_vp_to_screen_y(vp, 0.0);
+    float row_top = axis_y + line_h * 1.15f;
+    float row_lo = safe;
+    float row_hi = h - safe - line_h;
+    if (row_hi < row_lo) row_hi = row_lo;
+    if (row_top < row_lo) row_top = row_lo;
+    if (row_top > row_hi) row_top = row_hi;
+    bool row_pinned_bottom = row_top >= row_hi - 0.5f;
+
+    float axis_x = fd_vp_to_screen_x(vp, 0.0);
+    const float diag = safe + (h - safe); /* 左下角对角线：x + y = diag */
+
     double x0 = ceil(left / step) * step;
     for (int i = 0; i < 64 && x0 <= right; i++, x0 += step) {
         double v = fabs(x0) < step * 1e-6 ? 0.0 : x0;
@@ -359,7 +394,18 @@ static void draw_grid_and_axes(const fd_viewport *vp, const fd_settings *st)
         if (st->show_numbers && v != 0.0) {
             char buf[32];
             fmt_num(buf, sizeof(buf), v);
-            add_number(g_numbers, ix + 2, (int)(g_h / 2) + 3, buf);
+            lv_point_t sz;
+            lv_text_get_size(&sz, buf, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            float lx = (float)ix + 2.0f;
+            float max_x = w - safe - (float)sz.x;
+            /* 贴底时，横轴数字的左端不能越过 45° 分界线。 */
+            if (row_pinned_bottom) {
+                float lim = diag - (row_top + line_h * 0.5f);
+                if (lx < lim) lx = lim;
+            }
+            if (lx > max_x) lx = max_x;
+            if (lx < safe) lx = safe;
+            add_number(g_numbers, (int)lroundf(lx), (int)lroundf(row_top), buf);
         }
     }
 
@@ -375,7 +421,27 @@ static void draw_grid_and_axes(const fd_viewport *vp, const fd_settings *st)
         if (st->show_numbers && v != 0.0) {
             char buf[32];
             fmt_num(buf, sizeof(buf), v);
-            add_number(g_numbers, (int)(g_w / 2) + 4, iy - 8, buf);
+            lv_point_t sz;
+            lv_text_get_size(&sz, buf, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            /* 右对齐骑在 y 轴左侧；轴滑出左缘时贴左边。 */
+            float lx = axis_x - (float)sz.x - 4.0f;
+            float max_x = w - safe - (float)sz.x;
+            bool pinned_left = false;
+            if (lx < safe) {
+                lx = safe;
+                pinned_left = true;
+            }
+            if (lx > max_x) lx = max_x;
+            /* 纵向铺满整屏，只夹进安全区。 */
+            float ly = (float)iy - line_h * 0.5f;
+            if (ly < safe) ly = safe;
+            if (ly > h - safe - line_h) ly = h - safe - line_h;
+            /* 左下角撞车时，越过分界线的纵轴数字整颗不画。 */
+            if (row_pinned_bottom && pinned_left &&
+                (lx + (float)sz.x * 0.5f) + (ly + line_h * 0.5f) > diag) {
+                continue;
+            }
+            add_number(g_numbers, (int)lroundf(lx), (int)lroundf(ly), buf);
         }
     }
 
@@ -866,7 +932,7 @@ static void update_card(void)
     } else {
         snprintf(buf, sizeof(buf), "%s", c->fn.src1);
     }
-    lv_label_set_text(g_card_expr, buf);
+    ui_math_set_text(g_card_expr, buf, FD_C_DIM);
 
     if (model()->settings.complex_plane) {
         fd_expr_error err;
@@ -1645,6 +1711,8 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
 
     switch (action) {
         case 0: /* DOWN */
+            g_drag_point_id = 0;
+            g_tool_down_committed = false;
             g_drag = !in_ui_band(y0) && g_tool == FD_TOOL_MOVE;
             g_pinching = false;
             g_moved = false;
@@ -1653,6 +1721,25 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
             g_last_x = x0;
             g_last_y = y0;
             g_down_tick = lv_tick_get();
+            /* 工具统一「按下就有点」（对齐 main 1.2.26）：不用等抬手。
+             * 唯一例外是手指下面已经有一个点 —— 那一串交给拖点，
+             * 否则描点模式下会「又描一个新点、两个点一起动」。 */
+            if (!in_ui_band(y0) && g_tool != FD_TOOL_MOVE) {
+                fd_geo *hit = pick_point_obj(x0, y0, 20.0f * ui_scale());
+                if (g_tool == FD_TOOL_PLOT && hit) {
+                    g_drag_point_id = hit->id;
+                } else {
+                    tool_tap(x0, y0);
+                    g_tool_down_committed = true;
+                }
+            } else if (!in_ui_band(y0) && g_tool == FD_TOOL_MOVE) {
+                /* 移动工具下也能拖点：手指压住某个点就拖它，而不是平移画布。 */
+                fd_geo *hit = pick_point_obj(x0, y0, 20.0f * ui_scale());
+                if (hit) {
+                    g_drag_point_id = hit->id;
+                    g_drag = false;
+                }
+            }
             break;
 
         case 5: /* POINTER_DOWN */
@@ -1680,6 +1767,13 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
                 }
                 g_pinch_dist = dist;
                 g_pinching = true;
+            } else if (g_drag_point_id != 0) {
+                /* 拖点：把几何点跟着手指挪到新的世界坐标。 */
+                fd_geo *p = model_geo(g_drag_point_id);
+                if (p && p->npts > 0) {
+                    screen_to_world(x0, y0, &p->p[0][0], &p->p[0][1]);
+                    repaint();
+                }
             } else if (g_drag) {
                 float dx = x0 - g_last_x;
                 float dy = y0 - g_last_y;
@@ -1702,10 +1796,15 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
             break;
 
         case 1: /* UP */
+            /* 拖点结束：记一次撤销快照（拖动过程中不压栈，免得一次拖动塞满撤销栈）。 */
+            if (g_drag_point_id != 0 && g_moved) model_checkpoint();
             if (!g_moved && !in_ui_band(g_down_y)) {
                 uint32_t elapsed = lv_tick_elaps(g_down_tick);
                 if (g_tool != FD_TOOL_MOVE) {
-                    tool_tap(g_down_x, g_down_y);
+                    /* 按下时已经提交过（main 1.2.26「按下就有点」），这里不再重复。 */
+                    if (!g_tool_down_committed) tool_tap(g_down_x, g_down_y);
+                } else if (g_drag_point_id != 0) {
+                    /* 手指压在已有的点上：不触发长按删除。 */
                 } else if (elapsed > 700) {
                     /* 长按删除作图对象 */
                     geo_delete_at(g_down_x, g_down_y);
@@ -1765,6 +1864,8 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
             }
             g_drag = false;
             g_pinching = false;
+            g_drag_point_id = 0;
+            g_tool_down_committed = false;
             break;
 
         default:
@@ -1774,10 +1875,22 @@ void ui_graph_touch(int action, int count, float x0, float y0, float x1, float y
 
 void ui_graph_crown(float delta)
 {
-    if (!g_px || delta == 0.0f) return;
+    if (!g_px || delta == 0.0f || !isfinite(delta)) return;
     fd_doc *d = model();
     if (d->settings.crown_zoom) {
-        double factor = delta > 0.0f ? 1.12 : (1.0 / 1.12);
+        /* 软饱和（对齐 main 1.2.25）：
+         *
+         *   exp(tanh(x / LIMIT) * LIMIT)，x = 一次事件的像素量 * 0.0016
+         *
+         * 旧写法是 sign(delta) → 固定 1.12 倍：拨一格和拨十格没区别，灵敏度形同虚设。
+         * 硬夹子 exp(clamp(x, ±0.25)) 又会把 1×/10× 压平成同一个值。
+         * tanh 在小步长时近似线性（灵敏度如实乘进去），只在 ROM 一次给巨量像素时
+         * 渐近到 LIMIT，依旧不会「转一格直接放大十倍」。
+         */
+        const double limit = 0.35;
+        double x = (double)delta * 0.0016;
+        double soft = tanh(x / limit) * limit;
+        double factor = exp(soft);
         model_zoom(factor, g_w / 2.0, g_h / 2.0);
     } else {
         model_pan(0.0, delta * 10.0);
@@ -1837,6 +1950,7 @@ void ui_graph_detach(void)
     g_play_dir = 1;
     g_root = NULL;
     g_canvas = NULL;
+    g_blur_canvas = NULL;
     g_numbers = NULL;
     g_card = NULL;
     g_card_dot = NULL;
@@ -2024,19 +2138,26 @@ static void tool_chip_clicked(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (g_panel) lv_obj_add_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    show_panel_backdrop(false);
     tool_set((fd_tool)idx);
 }
 
 static void tools_clicked(lv_event_t *e)
 {
     LV_UNUSED(e);
-    if (g_panel) lv_obj_remove_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    if (g_panel) {
+        show_panel_backdrop(true);
+        lv_obj_remove_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void panel_close_clicked(lv_event_t *e)
 {
     LV_UNUSED(e);
-    if (g_panel) lv_obj_add_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+    if (g_panel) {
+        lv_obj_add_flag(g_panel, LV_OBJ_FLAG_HIDDEN);
+        show_panel_backdrop(false);
+    }
 }
 
 static void clear_geo_clicked(lv_event_t *e)
@@ -2106,6 +2227,152 @@ static void build_hint(lv_obj_t *parent)
     lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* ------------------------------------------------------------------ */
+/* 工具面板背后的毛玻璃                                                 */
+/* ------------------------------------------------------------------ */
+
+static uint32_t *g_blur_px;
+static int g_blur_w, g_blur_h, g_blur_stride;
+
+static void ensure_blur_buffer(int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    if (g_blur_px && w == g_blur_w && h == g_blur_h) return;
+    free(g_blur_px);
+    g_blur_px = (uint32_t *)calloc(1, (size_t)w * (size_t)h * 4u + 64u);
+    if (!g_blur_px) {
+        g_blur_w = g_blur_h = 0;
+        return;
+    }
+    g_blur_w = w;
+    g_blur_h = h;
+    g_blur_stride = w;
+}
+
+static void blur_h(const uint32_t *src, int w, int h, int sstride, uint32_t *dst,
+                   int dstride, int r)
+{
+    for (int y = 0; y < h; y++) {
+        const uint32_t *row = src + (size_t)y * sstride;
+        uint32_t *out = dst + (size_t)y * dstride;
+        uint32_t sb = 0, sg = 0, srr = 0;
+        int cnt = 0;
+        for (int x = 0; x <= r && x < w; x++) {
+            uint32_t c = row[x];
+            sb += c & 0xFFu;
+            sg += (c >> 8) & 0xFFu;
+            srr += (c >> 16) & 0xFFu;
+            cnt++;
+        }
+        for (int x = 0; x < w; x++) {
+            out[x] = 0xFF000000u | ((srr / (uint32_t)cnt) << 16) |
+                     ((sg / (uint32_t)cnt) << 8) | (sb / (uint32_t)cnt);
+            int add = x + r + 1;
+            int rem = x - r;
+            if (add < w) {
+                uint32_t c = row[add];
+                sb += c & 0xFFu;
+                sg += (c >> 8) & 0xFFu;
+                srr += (c >> 16) & 0xFFu;
+                cnt++;
+            }
+            if (rem >= 0) {
+                uint32_t c = row[rem];
+                sb -= c & 0xFFu;
+                sg -= (c >> 8) & 0xFFu;
+                srr -= (c >> 16) & 0xFFu;
+                cnt--;
+            }
+        }
+    }
+}
+
+static void blur_v(const uint32_t *src, int w, int h, int sstride, uint32_t *dst,
+                   int dstride, int r)
+{
+    for (int x = 0; x < w; x++) {
+        uint32_t sb = 0, sg = 0, srr = 0;
+        int cnt = 0;
+        for (int y = 0; y <= r && y < h; y++) {
+            uint32_t c = src[(size_t)y * sstride + x];
+            sb += c & 0xFFu;
+            sg += (c >> 8) & 0xFFu;
+            srr += (c >> 16) & 0xFFu;
+            cnt++;
+        }
+        for (int y = 0; y < h; y++) {
+            dst[(size_t)y * dstride + x] = 0xFF000000u |
+                    ((srr / (uint32_t)cnt) << 16) | ((sg / (uint32_t)cnt) << 8) |
+                    (sb / (uint32_t)cnt);
+            int add = y + r + 1;
+            int rem = y - r;
+            if (add < h) {
+                uint32_t c = src[(size_t)add * sstride + x];
+                sb += c & 0xFFu;
+                sg += (c >> 8) & 0xFFu;
+                srr += (c >> 16) & 0xFFu;
+                cnt++;
+            }
+            if (rem >= 0) {
+                uint32_t c = src[(size_t)rem * sstride + x];
+                sb -= c & 0xFFu;
+                sg -= (c >> 8) & 0xFFu;
+                srr -= (c >> 16) & 0xFFu;
+                cnt--;
+            }
+        }
+    }
+}
+
+/** 把绘图画布的内容模糊一份写进背景 canvas（面板打开时调一次）。 */
+static void refresh_panel_backdrop(void)
+{
+    if (!g_blur_canvas || !g_px || !g_blur_px) return;
+    int w = g_w;
+    int h = g_h;
+    if (w <= 0 || h <= 0) return;
+    uint32_t *tmp = (uint32_t *)malloc((size_t)w * (size_t)h * 4u);
+    if (!tmp) return;
+    int r = UI_PX(6);
+    if (r < 1) r = 1;
+    blur_h(g_px, w, h, g_stride_px, tmp, w, r);
+    blur_v(tmp, w, h, w, g_blur_px, g_blur_stride, r);
+    free(tmp);
+    lv_obj_invalidate(g_blur_canvas);
+}
+
+static void build_panel_backdrop(lv_obj_t *parent)
+{
+    ensure_blur_buffer(g_w, g_h);
+    lv_obj_t *cv = lv_canvas_create(parent);
+    g_blur_canvas = cv;
+    lv_obj_set_pos(cv, 0, 0);
+    lv_obj_remove_flag(cv, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cv, LV_OBJ_FLAG_SCROLLABLE);
+    if (g_blur_px) {
+        lv_canvas_set_buffer(cv, g_blur_px, g_w, g_h, LV_COLOR_FORMAT_ARGB8888);
+        lv_draw_buf_t *db = lv_canvas_get_draw_buf(cv);
+        if (db && db->data) {
+            g_blur_px = (uint32_t *)db->data;
+            g_blur_stride = (int)(db->header.stride / 4u);
+        } else {
+            g_blur_stride = g_w;
+        }
+    }
+    lv_obj_add_flag(cv, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_panel_backdrop(bool show)
+{
+    if (!g_blur_canvas) return;
+    if (show) {
+        refresh_panel_backdrop();
+        lv_obj_remove_flag(g_blur_canvas, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(g_blur_canvas, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void build_tool_panel(lv_obj_t *parent)
 {
     lv_obj_t *p = lv_obj_create(parent);
@@ -2114,7 +2381,8 @@ static void build_tool_panel(lv_obj_t *parent)
     lv_obj_set_size(p, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(p, 0, 0);
     lv_obj_set_style_bg_color(p, lv_color_hex(FD_C_BG), 0);
-    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    /* 半透明 + 背后的模糊画布 = 毛玻璃面板。 */
+    lv_obj_set_style_bg_opa(p, LV_OPA_80, 0);
     lv_obj_set_style_pad_all(p, UI_PX(12), 0);
     lv_obj_set_style_pad_row(p, UI_PX(6), 0);
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
@@ -2283,12 +2551,8 @@ static void build_card(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_card_name, lv_color_hex(FD_C_TEXT), 0);
     lv_obj_align(g_card_name, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(6));
 
-    g_card_expr = lv_label_create(card);
-    lv_label_set_text(g_card_expr, "sin(x)");
-    lv_label_set_long_mode(g_card_expr, LV_LABEL_LONG_DOT);
+    g_card_expr = ui_math_create(card, "sin(x)", FD_C_DIM);
     lv_obj_set_width(g_card_expr, UI_PX(198));
-    lv_obj_set_style_text_font(g_card_expr, ui_font_small(), 0);
-    lv_obj_set_style_text_color(g_card_expr, lv_color_hex(FD_C_DIM), 0);
     lv_obj_align(g_card_expr, LV_ALIGN_TOP_LEFT, UI_PX(30), UI_PX(28));
 
     g_card_err = lv_label_create(card);
@@ -2379,7 +2643,8 @@ lv_obj_t *ui_graph_create(lv_obj_t *parent)
     build_zoom_bar(g_root);
     build_card(g_root);
     build_hint(g_root);
-    /* 工具面板是全屏浮层，最后建才能盖在其它控件之上。 */
+    /* 工具面板是全屏浮层，最后建才能盖在其它控件之上；模糊背景在它下面。 */
+    build_panel_backdrop(g_root);
     build_tool_panel(g_root);
 
     g_tool = FD_TOOL_MOVE;

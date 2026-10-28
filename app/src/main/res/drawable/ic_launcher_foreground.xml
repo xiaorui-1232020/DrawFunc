@@ -1,28 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 图标：一条正弦曲线 + 坐标轴。108dp 画布，内容控制在中心 72dp 安全区内。 -->
+<!--
+  应用图标（自适应图标的前景层）：深色坐标纸上的一条正弦曲线，
+  曲线的波峰上有一个高亮采样点，呼应「函数绘图」本身。
+  108dp 画布，主体都落在中心 72dp 安全区里。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 坐标轴 -->
-    <path
-        android:pathData="M28,54 L80,54"
-        android:strokeColor="#3A4A55"
-        android:strokeWidth="3"
-        android:strokeLineCap="round" />
-    <path
-        android:pathData="M54,32 L54,76"
-        android:strokeColor="#3A4A55"
-        android:strokeWidth="3"
-        android:strokeLineCap="round" />
+    <!-- 网格：比轴线更淡，做出坐标纸的层次 -->
+    <path android:pathData="M30,42 L78,42" android:strokeColor="#1B2530"
+        android:strokeWidth="1.5" android:strokeAlpha="0.9" />
+    <path android:pathData="M30,66 L78,66" android:strokeColor="#1B2530"
+        android:strokeWidth="1.5" android:strokeAlpha="0.9" />
+    <path android:pathData="M42,30 L42,78" android:strokeColor="#1B2530"
+        android:strokeWidth="1.5" android:strokeAlpha="0.9" />
+    <path android:pathData="M66,30 L66,78" android:strokeColor="#1B2530"
+        android:strokeWidth="1.5" android:strokeAlpha="0.9" />
 
-    <!-- 曲线 -->
+    <!-- 坐标轴 -->
+    <path android:pathData="M27,54 L81,54" android:strokeColor="#5B6B7A"
+        android:strokeWidth="2.5" android:strokeLineCap="round" />
+    <path android:pathData="M54,33 L54,75" android:strokeColor="#5B6B7A"
+        android:strokeWidth="2.5" android:strokeLineCap="round" />
+
+    <!-- 曲线本体：先描一层深色底，再叠亮色，边缘更干净 -->
     <path
-        android:pathData="M28,54 C36,34 44,34 54,54 C64,74 72,74 80,54"
-        android:strokeColor="#7FD8FF"
-        android:strokeWidth="6"
+        android:pathData="M27,54 C34,32 44,32 54,54 C64,76 74,76 81,54"
+        android:strokeColor="#0E2B38"
+        android:strokeWidth="10"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
+    <path
+        android:pathData="M27,54 C34,32 44,32 54,54 C64,76 74,76 81,54"
+        android:strokeColor="#7FD8FF"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- 波峰上的采样点：白圈 + 亮心 -->
+    <path android:pathData="M41,38.6 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0"
+        android:fillColor="#00000000"
+        android:strokeColor="#E8EEF5"
+        android:strokeWidth="2"
+        android:strokeAlpha="0.75" />
+    <path android:pathData="M41,38.6 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"
+        android:fillColor="#E8EEF5" />
+
+    <!-- 原点小方块，强调坐标轴交点 -->
+    <path android:pathData="M54,54 m-2.6,0 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0"
+        android:fillColor="#7FD8FF" />
 </vector>

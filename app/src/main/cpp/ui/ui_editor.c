@@ -173,11 +173,42 @@ static bool validate_text(const char *src, fd_plot_mode mode, bool degrees,
 /* 键盘                                                                */
 /* ------------------------------------------------------------------ */
 
+/* 根号 / 绝对值类按键插下的「空骨架」：退格时一次还回去，不留下半截括号。 */
+static const char *const k_structural[] = {
+        "sqrt()", "cbrt()", "abs()", "√()", "∛()", "root(,)",
+};
+
+/** 光标左边正好是一个完整空骨架时整段删掉；返回 true 表示已处理。 */
+static bool delete_structural_before(lv_obj_t *ta)
+{
+    if (!ta) return false;
+    const char *txt = lv_textarea_get_text(ta);
+    uint32_t pos = lv_textarea_get_cursor_pos(ta);
+    if (!txt || pos == 0) return false;
+
+    for (size_t i = 0; i < sizeof(k_structural) / sizeof(k_structural[0]); i++) {
+        size_t len = strlen(k_structural[i]);
+        if (pos < len || strncmp(txt + pos - len, k_structural[i], len) != 0) continue;
+
+        char buf[FD_SRC_CAP];
+        size_t head = pos - len;
+        size_t tail = strlen(txt + pos);
+        if (head + tail + 1 > sizeof(buf)) return false;
+        memcpy(buf, txt, head);
+        memcpy(buf + head, txt + pos, tail + 1);
+        lv_textarea_set_text(ta, buf);
+        lv_textarea_set_cursor_pos(ta, (int32_t)head);
+        return true;
+    }
+    return false;
+}
+
 static void insert_text(const char *text)
 {
     if (!g_ta_active) return;
     char buf[32];
-    /* 函数键补上左括号，少按一次。 */
+    bool want_inside = false;
+    /* 函数键插 name() 并把光标放进括号里，少按两次。 */
     if (strcmp(text, "sin") == 0 || strcmp(text, "cos") == 0 ||
         strcmp(text, "tan") == 0 || strcmp(text, "asin") == 0 ||
         strcmp(text, "acos") == 0 || strcmp(text, "atan") == 0 ||
@@ -186,13 +217,16 @@ static void insert_text(const char *text)
         strcmp(text, "ln") == 0 || strcmp(text, "exp") == 0 ||
         strcmp(text, "abs") == 0 || strcmp(text, "floor") == 0 ||
         strcmp(text, "ceil") == 0 || strcmp(text, "round") == 0) {
-        snprintf(buf, sizeof(buf), "%s(", text);
+        snprintf(buf, sizeof(buf), "%s()", text);
+        want_inside = true;
     } else if (strcmp(text, "√") == 0) {
-        snprintf(buf, sizeof(buf), "sqrt(");
+        snprintf(buf, sizeof(buf), "sqrt()");
+        want_inside = true;
     } else {
         snprintf(buf, sizeof(buf), "%s", text);
     }
     lv_textarea_add_text(g_ta_active, buf);
+    if (want_inside) lv_textarea_cursor_left(g_ta_active);
 }
 
 static void refresh_error(void);
@@ -219,7 +253,8 @@ static void key_clicked(lv_event_t *e)
     }
 
     if (strcmp(text, "退") == 0) {
-        lv_textarea_delete_char(g_ta_active);
+        /* 根号 / 绝对值类的空骨架整段删掉，否则会先露出半截括号。 */
+        if (!delete_structural_before(g_ta_active)) lv_textarea_delete_char(g_ta_active);
     } else if (strcmp(text, "清") == 0) {
         lv_textarea_set_text(g_ta_active, "");
     } else {
@@ -334,6 +369,48 @@ static void tab_clicked(lv_event_t *e)
 /* 提交                                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 找出表达式里第一个 LaTeX 命令（形如 \frac、\sqrt、\pi）。
+ *
+ * 排版层（ui_math）认这些写法，但求值引擎只认普通表达式，所以这类输入
+ * 不当成「错误」处理：提示「暂不能求值、可继续编辑」，原文一个字都不改。
+ */
+static bool find_latex_command(const char *src, char *cmd, size_t cap)
+{
+    if (!src) return false;
+    for (const char *s = src; *s; s++) {
+        if (*s != '\\') continue;
+        size_t n = 0;
+        if (n + 1 < cap) cmd[n++] = '\\';
+        s++;
+        while (*s && isalpha((unsigned char)*s)) {
+            if (n + 1 < cap) cmd[n++] = *s;
+            s++;
+        }
+        cmd[n] = '\0';
+        return n > 1;
+    }
+    return false;
+}
+
+/** 校验失败时的提示：LaTeX 命令走中性提示，其余照旧报错。 */
+static void set_error_latex_aware(const char *src, const char *msg)
+{
+    if (!g_err) return;
+    char cmd[24];
+    if (find_latex_command(src, cmd, sizeof(cmd))) {
+        char note[160];
+        snprintf(note, sizeof(note),
+                 "%s 暂不能求值，已按源码显示；可以继续编辑或改成普通写法", cmd);
+        lv_obj_set_style_text_color(g_err, lv_color_hex(FD_C_DIM), 0);
+        lv_label_set_text(g_err, note);
+    } else {
+        lv_obj_set_style_text_color(g_err, lv_color_hex(FD_C_DANGER), 0);
+        lv_label_set_text(g_err, msg);
+    }
+    lv_obj_remove_flag(g_err, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void refresh_error(void)
 {
     if (!g_err) return;
@@ -345,18 +422,22 @@ static void refresh_error(void)
     msg[0] = '\0';
 
     const char *t1 = lv_textarea_get_text(g_ta1);
-    bool ok = validate_text(t1 ? t1 : "", c->fn.mode, deg, msg, sizeof(msg));
+    const char *src1 = t1 ? t1 : "";
+    const char *bad = NULL;
+    bool ok = validate_text(src1, c->fn.mode, deg, msg, sizeof(msg));
+    if (!ok) bad = src1;
 
     if (ok && c->fn.mode == FD_PLOT_PARAMETRIC) {
         const char *t2 = g_ta2 ? lv_textarea_get_text(g_ta2) : "";
-        ok = validate_text(t2 ? t2 : "", FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg));
+        if (!t2) t2 = "";
+        ok = validate_text(t2, FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg));
+        if (!ok) bad = t2;
     }
 
     if (ok) {
         lv_obj_add_flag(g_err, LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_label_set_text(g_err, msg);
-        lv_obj_remove_flag(g_err, LV_OBJ_FLAG_HIDDEN);
+        set_error_latex_aware(bad, msg);
     }
 }
 
@@ -380,18 +461,27 @@ static void commit_and_back(void)
     msg[0] = '\0';
 
     const char *t1 = lv_textarea_get_text(g_ta1);
-    if (!validate_text(t1 ? t1 : "", c->fn.mode, deg, msg, sizeof(msg))) {
+    const char *src1 = t1 ? t1 : "";
+    if (!validate_text(src1, c->fn.mode, deg, msg, sizeof(msg))) {
         refresh_error();
-        ui_toast(msg);
+        /* LaTeX 命令只是「还不能求值」，不当成错误信息糊到脸上。 */
+        char cmd[24];
+        ui_toast(find_latex_command(src1, cmd, sizeof(cmd))
+                         ? "LaTeX 命令暂不支持求值，源码已保留"
+                         : msg);
         return;
     }
     if (c->fn.mode == FD_PLOT_PARAMETRIC) {
         const char *t2 = g_ta2 ? lv_textarea_get_text(g_ta2) : "";
-        if (!validate_text(t2 ? t2 : "", FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg))) {
-            ui_toast(msg);
+        if (!t2) t2 = "";
+        if (!validate_text(t2, FD_PLOT_PARAMETRIC, deg, msg, sizeof(msg))) {
+            char cmd[24];
+            ui_toast(find_latex_command(t2, cmd, sizeof(cmd))
+                             ? "LaTeX 命令暂不支持求值，源码已保留"
+                             : msg);
             return;
         }
-        snprintf(c->fn.src2, sizeof(c->fn.src2), "%s", t2 ? t2 : "");
+        snprintf(c->fn.src2, sizeof(c->fn.src2), "%s", t2);
     }
 
     snprintf(c->fn.src1, sizeof(c->fn.src1), "%s", t1 ? t1 : "");

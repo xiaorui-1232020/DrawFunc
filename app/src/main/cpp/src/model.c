@@ -78,6 +78,7 @@ static void doc_defaults(fd_doc *d)
     d->settings.show_zoom_bar = false;
     d->settings.show_presets = true;
     d->settings.complex_plane = false;
+    d->settings.tutorial_done = false;
     d->next_id = 1;
     d->geo_next_id = 1;
     d->selected_id = 0;
@@ -542,7 +543,7 @@ static void serialize_doc(strbuf *sb, const fd_doc *d, const char *title)
     sb_printf(sb, "meta\t");
     sb_field(sb, title ? title : "");
     sb_printf(sb, "\n");
-    sb_printf(sb, "settings\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+    sb_printf(sb, "settings\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
               d->settings.show_grid ? 1 : 0,
               d->settings.show_axes ? 1 : 0,
               d->settings.show_numbers ? 1 : 0,
@@ -551,7 +552,8 @@ static void serialize_doc(strbuf *sb, const fd_doc *d, const char *title)
               d->settings.crown_zoom ? 1 : 0,
               d->settings.show_zoom_bar ? 1 : 0,
               d->settings.show_presets ? 1 : 0,
-              d->settings.complex_plane ? 1 : 0);
+              d->settings.complex_plane ? 1 : 0,
+              d->settings.tutorial_done ? 1 : 0);
     sb_printf(sb, "viewport\t%.17g\t%.17g\t%.17g\t%d\n",
               d->vp.center_x, d->vp.center_y, d->vp.units_per_px,
               d->view_initialized ? 1 : 0);
@@ -641,6 +643,7 @@ static bool parse_doc(char *text, fd_doc *out)
             out->settings.show_zoom_bar = n >= 8 && atoi(f[7]) != 0;
             out->settings.show_presets = n >= 9 ? atoi(f[8]) != 0 : true;
             out->settings.complex_plane = n >= 10 && atoi(f[9]) != 0;
+            out->settings.tutorial_done = n >= 11 && atoi(f[10]) != 0;
         } else if (strcmp(f[0], "viewport") == 0 && n >= 5) {
             out->vp.center_x = atof(f[1]);
             out->vp.center_y = atof(f[2]);

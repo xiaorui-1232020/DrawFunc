@@ -34,8 +34,11 @@ typedef enum {
     UI_SCR_PROPS,
     UI_SCR_ARCHIVE,
     UI_SCR_SETTINGS,
-    UI_SCR_ABOUT
+    UI_SCR_ABOUT,
+    UI_SCR_WELCOME
 } ui_screen;
+
+#define UI_SCREEN_COUNT ((int)UI_SCR_WELCOME + 1)
 
 void ui_init(void);
 void ui_deinit(void);
@@ -79,6 +82,7 @@ void ui_set_click(lv_obj_t *obj, lv_event_cb_t cb);
 
 /* ---- 各屏创建函数（供 ui.c 调用） ---- */
 lv_obj_t *ui_graph_create(lv_obj_t *parent);
+lv_obj_t *ui_welcome_create(lv_obj_t *parent);
 lv_obj_t *ui_list_create(lv_obj_t *parent);
 lv_obj_t *ui_editor_create(lv_obj_t *parent);
 lv_obj_t *ui_props_create(lv_obj_t *parent);

@@ -18,6 +18,7 @@
 #include "model.h"
 #include "src/libs/lodepng/lodepng.h"
 #include "ui.h"
+#include "ui_tour.h"
 
 /* 屏幕尺寸：默认按 466×466 圆表，可用 -DFD_W= / -DFD_H= 覆盖来验证其它设备。 */
 #ifndef FD_W
@@ -208,6 +209,14 @@ int main(int argc, char **argv)
         }
         if (missing) printf("FONT MISSING %d\n", missing);
     }
+
+    /* 首次启动：欢迎页 + 引导第 1 步 + 收尾（会把 tutorial_done 写进文档） */
+    dump("00_welcome");
+    ui_tour_start();
+    pump(12);
+    dump("00_tour_step1");
+    ui_tour_finish();
+    pump(6);
 
     dump("01_graph");
 
@@ -430,6 +439,47 @@ int main(int argc, char **argv)
         dump("20_complex");
         model()->settings.complex_plane = false;
     }
+
+    /* 打开坐标刻度数字：验证横轴数字跟轴走、纵轴数字在轴左侧（对齐 main 1.2.28） */
+    model()->settings.show_numbers = true;
+    ui_show(UI_SCR_GRAPH);
+    pump(6);
+    dump("24_graph_numbers");
+    /* 轴滑到屏幕左上角外：横轴数字应连续贴在顶部，纵轴数字贴左边 */
+    model()->vp.center_x = 8.0;
+    model()->vp.center_y = -8.0;
+    ui_graph_invalidate();
+    pump(4);
+    dump("25_graph_numbers_corner");
+    model()->settings.show_numbers = false;
+    model_reset_view();
+
+    /* LaTeX 命令：编辑器不报红，改成中性提示（源码保留，可继续编辑） */
+    {
+        int id = model_add_curve(FD_PLOT_EXPLICIT);
+        fd_curve *c = model_curve(id);
+        if (c) {
+            snprintf(c->fn.src1, sizeof(c->fn.src1), "\\frac{1}{2}");
+            model_select(id);
+        }
+        ui_show(UI_SCR_EDIT);
+        pump(6);
+        dump("26_editor_latex");
+    }
+
+    /* 新手引导：第 3 步必须先点一下高亮区域才放行 */
+    ui_tour_start();
+    pump(10);      /* 遮罩是 40ms 定时器建的，先等它落定 */
+    tap(408, 436); /* 下一步 → 第 2 步 */
+    pump(12);
+    tap(408, 436); /* 下一步 → 第 3 步 */
+    pump(12);
+    dump("27_tour_step3");
+    tap(233, 200); /* 点高亮区：解除锁定 */
+    pump(10);
+    dump("28_tour_step3_armed");
+    ui_tour_finish();
+    pump(4);
 
     /* PNG 导出（先回到图像屏，导出按模型重画） */
     ui_show(UI_SCR_GRAPH);
