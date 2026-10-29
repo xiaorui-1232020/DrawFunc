@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FunctionDrawer · LVGL 线交接文档</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#151c24; --panel2:#1b242e; --line:#26313c;
+    --text:#e8eef5; --dim:#93a1af; --accent:#7fd8ff; --green:#7ee2a8;
+    --amber:#ffd479; --red:#ff8a80; --purple:#c9a7ff;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono); font-size:.9em; background:#111820; padding:1px 5px; border-radius:4px; color:#cfe3f2}
+  pre{background:#0d141b; border:1px solid var(--line); border-radius:10px; padding:14px 16px; overflow:auto; margin:12px 0}
+  pre code{background:none; padding:0; font-size:13px; line-height:1.6}
+  h1,h2,h3{line-height:1.3; margin:0}
+  h2{font-size:22px; margin:0 0 6px}
+  h3{font-size:16px; margin:22px 0 8px; color:var(--accent)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0; padding-left:22px}
+  li{margin:4px 0}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 28px 80px}
+  header{background:linear-gradient(180deg,#0f1821 0%,#0b0f14 100%); border-bottom:1px solid var(--line); padding:44px 0 30px; margin-bottom:0}
+  header .wrap{display:flex; flex-direction:column; gap:14px}
+  .eyebrow{color:var(--dim); letter-spacing:.14em; font-size:12px; text-transform:uppercase}
+  .sub{color:var(--dim); font-size:14px}
+  .pills{display:flex; flex-wrap:wrap; gap:8px; margin-top:6px}
+  .pill{font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--line); background:var(--panel); color:var(--dim)}
+  .pill b{color:var(--text); font-weight:600}
+  nav{position:sticky; top:0; z-index:20; background:rgba(11,15,20,.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex; gap:18px; flex-wrap:wrap; padding-top:10px; padding-bottom:10px}
+  nav a{font-size:13px; color:var(--dim)}
+  nav a:hover{color:var(--accent)}
+  section{padding-top:46px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px 22px; margin:14px 0}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  table{width:100%; border-collapse:collapse; margin:12px 0; font-size:14px}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{color:var(--dim); font-weight:500; font-size:12px; letter-spacing:.05em; text-transform:uppercase}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; font-family:var(--mono)}
+  .ok{background:rgba(126,226,168,.12); color:var(--green); border:1px solid rgba(126,226,168,.3)}
+  .warn{background:rgba(255,212,121,.12); color:var(--amber); border:1px solid rgba(255,212,121,.3)}
+  .bad{background:rgba(255,138,128,.12); color:var(--red); border:1px solid rgba(255,138,128,.3)}
+  .info{background:rgba(127,216,255,.12); color:var(--accent); border:1px solid rgba(127,216,255,.3)}
+  .muted{color:var(--dim)}
+  .kbd{font-family:var(--mono); font-size:12px; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:1px 6px; background:#111820}
+  .callout{border-left:3px solid var(--accent); background:rgba(127,216,255,.06); padding:10px 16px; border-radius:0 8px 8px 0; margin:12px 0}
+  .callout.warn{border-left-color:var(--amber); background:rgba(255,212,121,.06)}
+  .callout.bad{border-left-color:var(--red); background:rgba(255,138,128,.06)}
+  .timeline{position:relative; margin:10px 0 0; padding-left:22px}
+  .timeline:before{content:""; position:absolute; left:6px; top:6px; bottom:6px; width:2px; background:var(--line)}
+  .titem{position:relative; margin:0 0 18px}
+  .titem:before{content:""; position:absolute; left:-20px; top:7px; width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px rgba(127,216,255,.15)}
+  .titem .when{font-size:12px; color:var(--dim); font-family:var(--mono)}
+  .chk{list-style:none; padding-left:0}
+  .chk li{padding-left:26px; position:relative; margin:8px 0}
+  .chk li:before{content:"☐"; position:absolute; left:4px; color:var(--dim); font-size:16px}
+  .mono{font-family:var(--mono)}
+  .small{font-size:13px}
+  footer{border-top:1px solid var(--line); margin-top:60px; padding:24px 0; color:var(--dim); font-size:13px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Handoff · 2026-10-29</div>
+    <h1>FunctionDrawer · LVGL 线交接文档</h1>
+    <div class="sub">给下一个接手的 agent：这里记录了本次会话做了什么、仓库/发布现在是什么状态、以及继续干活的具体命令和已知坑。</div>
+    <div class="pills">
+      <span class="pill">仓库 <b>xiaorui-1232020/DrawFunc</b></span>
+      <span class="pill">工作目录 <b>/workspace</b></span>
+      <span class="pill">当前 HEAD <b>0fabd00</b>（lvgl-working）</span>
+      <span class="pill">版本 <b>1.1 / versionCode 3</b></span>
+      <span class="pill">最新发布 <b>beta-0.5</b></span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="wrap">
+    <a href="#tldr">速览</a>
+    <a href="#state">当前状态</a>
+    <a href="#env">环境与重置</a>
+    <a href="#work">本次做了什么</a>
+    <a href="#playbook">接手后怎么做</a>
+    <a href="#pitfalls">已知坑</a>
+    <a href="#todo">待办</a>
+    <a href="#appendix">附录</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ==================== 速览 ==================== -->
+<section id="tldr">
+  <h2>一分钟速览</h2>
+  <div class="card">
+    <p>这个仓库有两条实现线，别搞混：</p>
+    <ul>
+      <li><b><code>main</code></b>（<code>f9731c9</code>，1.2.28）：旧的 <b>Jetpack Compose</b> 版，只做对照，不动。</li>
+      <li><b><code>lvgl</code> / <code>lvgl-working</code></b>：<b>C + LVGL 9.2.2</b> 版，全部业务在 NDK 里，Android 侧只有一个 SurfaceView 宿主。<b>日常开发在 lvgl-working，合入 lvgl。</b></li>
+    </ul>
+    <p>本次会话在这个 LVGL 线上做了四类事：</p>
+    <ol>
+      <li><b>分支整理</b>：重建又删掉 <code>lvgl-main-parity</code>，新建 <code>lvgl-working</code>（以 <code>lvgl</code> 为基线），之后一直保持同步。</li>
+      <li><b>三项功能/性能调整</b>：屏幕容器改成 LRU 只留最近 2 屏、LaTeX 命令不再报红改灰色提示、新手引导第 3/4 步必须真的点一下高亮区。</li>
+      <li><b>工程化</b>：新增 <code>tools/setup-sandbox-toolchain.sh</code>（一条命令装 SDK/NDK/Gradle），修了它一个 <code>gradle-8.7</code> vs <code>gradle-8.7-bin</code> 的 bug。</li>
+      <li><b>发版</b>：<code>beta-0.4</code> 与 <code>beta-0.5</code> 两个 GitHub Release，各 5 个签名 APK。</li>
+    </ol>
+    <div class="callout warn">
+      <b>最重要的一条：</b>这个沙箱会周期性重置。<code>.toolchain/</code>、<code>/tmp/</code>、git 的
+      <code>origin/lvgl</code> 远程引用、<code>remote.origin.fetch</code> 配置都会被清掉，工作区甚至会被自动
+      commit 成 <code>feat: update workspace</code> 后重推。<b>每次开工先做「环境体检」</b>（见 <a href="#playbook">playbook 第 0 步</a>）。
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 当前状态 ==================== -->
+<section id="state">
+  <h2>当前状态</h2>
+
+  <h3>分支</h3>
+  <table>
+    <tr><th>分支</th><th>提交</th><th>说明</th></tr>
+    <tr><td><code>lvgl</code></td><td class="mono">ad37c3c</td><td>合入基线。PR #9 的合并点，<b>内容与 lvgl-working 一致</b>，只多一个 merge commit。</td></tr>
+    <tr><td><code>lvgl-working</code></td><td class="mono">0fabd00</td><td>开发分支，当前工作区所在。比 <code>lvgl</code> 落后 1 个 merge commit，无独有提交。</td></tr>
+    <tr><td><code>main</code></td><td class="mono">f9731c9</td><td>旧的 Compose 版（1.2.28），不要动。</td></tr>
+  </table>
+
+  <h3>Tag / Release</h3>
+  <table>
+    <tr><th>Tag</th><th>指向提交</th><th>Release</th><th>说明</th></tr>
+    <tr><td><code>beta-0.5</code></td><td class="mono">1130000</td><td><span class="tag ok">已发布</span> 5 个 APK</td><td>tag 由用户创建；当时从 <code>0fabd00</code> 构建，两者只差 <code>3574904</code>（13 张截图，无代码）。</td></tr>
+    <tr><td><code>beta-0.4</code></td><td class="mono">3c02f74</td><td><span class="tag ok">已发布</span> 5 个 APK</td><td>tag 曾从 <code>1ee0608</code> 挪到 README 更新后的 <code>3c02f74</code>。</td></tr>
+    <tr><td><code>beta-0.3</code></td><td class="mono">—</td><td><span class="tag ok">已发布</span></td><td>更早的 LVGL 测试版。</td></tr>
+  </table>
+
+  <h3>PR</h3>
+  <table>
+    <tr><th>#</th><th>标题</th><th>状态</th></tr>
+    <tr><td>9</td><td>示例库 / 列表预览 / 存档对话框与标题的一批修复</td><td><span class="tag ok">MERGED</span></td></tr>
+    <tr><td>8</td><td>示例库按钮无响应 / 列表预览过期 / 存档弹窗返回</td><td><span class="tag ok">MERGED</span></td></tr>
+    <tr><td>7</td><td>chore: 加一个沙箱工具链安装脚本</td><td><span class="tag ok">MERGED</span></td></tr>
+    <tr><td>6</td><td>feat: LVGL 版对齐 main 1.2.25~1.2.28，并调优屏幕缓存/LaTeX/引导</td><td><span class="tag ok">MERGED</span></td></tr>
+  </table>
+
+  <h3>构建产物</h3>
+  <table>
+    <tr><th>路径</th><th>内容</th></tr>
+    <tr><td><code>dist/beta-0.5/</code></td><td>5 个已签名 APK（armeabi-v7a / arm64-v8a / x86_64 / universal / debug）。<b>不进版本库</b>，沙箱重置会丢，已上传到 Release。</td></tr>
+    <tr><td><code>test-artifacts/lvgl-smoke/</code></td><td><b>30 张</b>主机端冒烟截图（00_welcome 到 28_tour_step3_armed），入库。</td></tr>
+    <tr><td><code>test-artifacts/test2/</code></td><td><b>13 张</b>本轮四个 bug 的回归截图，入库。</td></tr>
+    <tr><td><code>.toolchain/</code></td><td>SDK/NDK/Gradle 缓存，<b>当前不存在</b>（被重置），需重跑安装脚本。</td></tr>
+  </table>
+</section>
+
+<!-- ==================== 环境 ==================== -->
+<section id="env">
+  <h2>环境与「会被重置」的事实</h2>
+  <div class="card">
+    <table>
+      <tr><th>项</th><th>值 / 说明</th></tr>
+      <tr><td>仓库根</td><td><code>/workspace</code>（<code>.git</code> 也在这一层），整目录约 121 MB</td></tr>
+      <tr><td>GitHub 认证</td><td><code>gh</code> 已登录 <code>xiaorui-1232020</code>，可直接 <code>gh pr</code> / <code>gh release</code></td></tr>
+      <tr><td>代理</td><td><code>HTTP_PROXY</code> / <code>HTTPS_PROXY</code> = <code>http://127.0.0.1:18080</code>；curl 自动读取，但 <b>Gradle 不读环境变量</b>，需要 <code>systemProp.*</code></td></tr>
+      <tr><td>JDK</td><td>默认 <code>java</code> 是 <b>25</b>，Gradle 8.7 不支持。构建必须指定 <code>JAVA_HOME=/root/.local/share/mise/installs/java/17.0.20+101</code></td></tr>
+      <tr><td>SDK</td><td>platform-34 / build-tools 34.0.0 / cmake 3.22.1 / NDK 27.2.12479018（r27c），全由安装脚本准备</td></tr>
+      <tr><td>签名</td><td><code>~/.android/debug.keystore</code>（口令 <code>android</code>，别名 <code>androiddebugkey</code>），<b>每次重置都会重新生成</b></td></tr>
+    </table>
+  </div>
+
+  <h3>沙箱重置时会丢的东西</h3>
+  <ul>
+    <li><code>.toolchain/</code>（SDK、NDK、Gradle 缓存）</li>
+    <li><code>/tmp/</code>（我之前放在那的截图、脚本草稿全丢过）</li>
+    <li>git 的 <code>refs/remotes/origin/*</code> 和 <code>remote.origin.fetch</code>（默认只剩 <code>main</code> 一条 refspec）</li>
+    <li>可能丢掉本地未提交改动；沙箱还会把工作区自动 commit 成 <code>feat: update workspace</code> 并推送</li>
+    <li><code>~/.android/debug.keystore</code>（签名指纹会变 → 新包无法覆盖旧包）</li>
+  </ul>
+  <div class="callout">
+    因此：<b>任何需要留存的产物都放 <code>/workspace</code> 下的 git 跟踪路径，或立刻上传到 GitHub Release</b>；<code>/tmp</code> 只放一次性中间文件。
+  </div>
+</section>
+
+<!-- ==================== 本次做了什么 ==================== -->
+<section id="work">
+  <h2>本次会话做了什么</h2>
+
+  <div class="timeline">
+
+    <div class="titem">
+      <div class="when">分支整理</div>
+      <h3>① 重建 → 删除 lvgl-main-parity，新建 lvgl-working</h3>
+      <p>先按要求把远端已被删的 <code>lvgl-main-parity</code> 重新推上去（<code>f9731c9</code>），随后又按要求删掉它，并基于当时的 <code>lvgl</code>（<code>0ff30d3</code>）新建 <code>lvgl-working</code>。中途还发现远端 <code>lvgl</code> 已从 <code>142f2f9</code> 前进到 <code>0ff30d3</code>（PR #5）。</p>
+      <p class="small muted">教训：本地 <code>origin/lvgl</code> 引用经常不存在，先补 refspec 再 fetch。</p>
+    </div>
+
+    <div class="titem">
+      <div class="when">代码 · 提交 8ae81c3 / 95d88e2</div>
+      <h3>② 三项调整（C + LVGL）</h3>
+      <table>
+        <tr><th>文件</th><th>改动</th><th>为什么</th></tr>
+        <tr>
+          <td><code>app/src/main/cpp/ui/ui.c</code></td>
+          <td>新增 <code>FD_SCREEN_CACHE 2</code> + <code>g_cache[]</code>、<code>cache_touch()</code>、<code>evict_screen()</code>；<code>show_screen()</code> 末尾调用 <code>cache_touch(s)</code>；<code>ui_deinit()</code> 重置 <code>g_cache_n</code></td>
+          <td>原来 7 个屏容器全常驻，LVGL 堆吃满。现在 LRU 只留最近 2 屏；淘汰绘图屏前先 <code>ui_graph_detach()</code>，防止静态指针悬空</td>
+        </tr>
+        <tr>
+          <td><code>app/src/main/cpp/ui/ui_editor.c</code></td>
+          <td>新增 <code>find_latex_command()</code> 与 <code>set_error_latex_aware()</code>；<code>refresh_error()</code> 记录失败来源并走中性提示；<code>commit_and_back()</code> 的 toast 对 LaTeX 换成友好文案</td>
+          <td>引擎不认 <code>\frac</code>/<code>\sqrt</code>，原来报红色错误。现在给灰色提示「暂不能求值，已按源码显示」，输入内容不改</td>
+        </tr>
+        <tr>
+          <td><code>app/src/main/cpp/ui/ui_tour.c</code></td>
+          <td>结构体加 <code>require_tap</code>（第 3、4 步为 true）；新增 <code>g_step_armed</code> / <code>g_hi_area</code> / <code>mask_clicked()</code>；按钮文案随 armed 切换「先点高亮区 ↔ 下一步」；<code>step_next()</code> 未 armed 时 toast 拦截</td>
+          <td>避免一路点「下一步」跳过引导；<b>注意坑</b>：第一版在 <code>build_step()</code> 里写 <code>g_step_armed = !require_tap</code>，重建卡片时把状态清掉，点击无效。改成只在 <code>step_next()</code> / <code>ui_tour_start()</code> 切换步骤时清零</td>
+        </tr>
+        <tr>
+          <td><code>app/src/main/cpp/tests/ui_smoke.c</code></td>
+          <td>新增 3 段冒烟：<code>26_editor_latex</code>、<code>27_tour_step3</code>、<code>28_tour_step3_armed</code></td>
+          <td>用截图证明三项都生效（含点击高亮区后按钮变化）</td>
+        </tr>
+      </table>
+      <p class="small muted">提交信息是 <code>feat: update workspace</code>（沙箱自动提交），代码本身已在 <code>lvgl</code> 与 <code>lvgl-working</code> 中。</p>
+    </div>
+
+    <div class="titem">
+      <div class="when">代码 · 提交 1ee0608</div>
+      <h3>③ 新增沙箱工具链安装脚本</h3>
+      <p><code>tools/setup-sandbox-toolchain.sh</code>：在新环境一条命令装齐 cmdline-tools 11076708、platform-34、build-tools 34.0.0、cmake 3.22.1、NDK r27c、Gradle 8.7 分发包。默认走腾讯云镜像（Google 直连在沙箱里约 45 KB/s，镜像约 39 MB/s）。支持 <code>--build</code> 顺带构建。</p>
+    </div>
+
+    <div class="titem">
+      <div class="when">代码 · 提交 32799a2</div>
+      <h3>④ 修脚本的 Gradle 404</h3>
+      <div class="callout bad">
+        用户实际运行时脚本 <code>exit=22</code>：变量写成 <code>GRADLE_DIST_VER=gradle-8.7</code>，而真实文件是 <b><code>gradle-8.7-bin.zip</code></b>，wrapper 缓存目录也是 <code>gradle-8.7-bin/</code>，于是三个源全部 404。
+      </div>
+      <p>修复内容：</p>
+      <ul>
+        <li>变量改为 <code>GRADLE_DIST=gradle-8.7-bin</code>，全脚本统一引用</li>
+        <li>新增 <code>fetch()</code>：逐源重试，判据为「文件非空」，Gradle 还要 <code>unzip -t</code> 校验</li>
+        <li>Gradle 三个源：<code>services.gradle.org</code> → <code>downloads.gradle.org</code> → 腾讯云镜像（官方源现在 307 跳 GitHub Release，容易 404）</li>
+        <li>SDK 组件同样支持镜像失败退回 <code>dl.google.com</code></li>
+        <li>全部失败时打印手工补救路径，不再静默退出</li>
+      </ul>
+      <p class="small muted">验证：<code>rm -rf .toolchain</code> 后从零跑，<code>exit=0</code>，工具链就绪。</p>
+    </div>
+
+    <div class="titem">
+      <div class="when">文档 · 提交 3c02f74</div>
+      <h3>⑤ 更新 lvgl 分支的 README（+51/−11）</h3>
+      <ul>
+        <li>分支说明改为 <code>lvgl-working</code> 开发、<code>lvgl</code> 合入、<code>main</code> 是 Compose 1.2.28，注明 <code>lvgl-main-parity</code> 已删除</li>
+        <li>体积表换成 beta-0.4 实测值；补 beta-0.4 发布与签名说明</li>
+        <li>构建章节加 <code>tools/setup-sandbox-toolchain.sh</code> 用法</li>
+        <li>屏幕路由段落改写为「LRU 只留 2 屏」；新增「数学排版」小节；补引导第 3/4 步需动手</li>
+        <li>已知限制补两条：LaTeX 子集、屏幕缓存 2 屏</li>
+      </ul>
+    </div>
+
+    <div class="titem">
+      <div class="when">发布</div>
+      <h3>⑥ beta-0.4 与 beta-0.5</h3>
+      <table>
+        <tr><th></th><th>beta-0.4</th><th>beta-0.5</th></tr>
+        <tr><td>tag 提交</td><td class="mono">3c02f74</td><td class="mono">1130000</td></tr>
+        <tr><td>构建来源</td><td class="mono">3c02f74</td><td class="mono">0fabd00</td></tr>
+        <tr><td>版本</td><td>1.1 / 3</td><td>1.1 / 3（按用户要求不变）</td></tr>
+        <tr><td>APK 数</td><td>5（v7a / arm64 / x86_64 / universal / debug）</td><td>5（同上）</td></tr>
+        <tr><td>证书 SHA-256</td><td class="mono">f4ec45d7…</td><td class="mono">f6c67e1d…</td></tr>
+        <tr><td>说明</td><td>LVGL 线对齐 main 1.2.28 + 三项调整</td><td>四个使用 bug 修复</td></tr>
+      </table>
+      <div class="callout warn">
+        两个发布用的是<b>不同 debug key</b>，彼此不能覆盖安装；表上装过旧包必须先卸载（会丢函数与设置）。
+      </div>
+      <p class="small muted">beta-0.5 构建时发现产物大小与 beta-0.4 完全相同，后来用「APK 内 <code>libfunctiondrawer.so</code> 的 SHA-256 == 本次 <code>stripped_native_libs</code>」证明不是旧文件，体积巧合来自签名对齐填充。</p>
+    </div>
+
+    <div class="titem">
+      <div class="when">PR 流水</div>
+      <h3>⑦ PR #6 / #7 / #9</h3>
+      <ul>
+        <li><b>#6</b>：LVGL 版对齐 main 1.2.25~1.2.28 + 三项调优，已合并（<code>1a84669</code>）</li>
+        <li><b>#7</b>：补工具链脚本（#6 合并后才推的，单独补 PR），已合并（<code>0c3289f</code>）</li>
+        <li><b>#9</b>：把用户自己 PR #8 合进 lvgl-working 的四个修复同步到 lvgl，已合并（<code>ad37c3c</code>）</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<!-- ==================== Playbook ==================== -->
+<section id="playbook">
+  <h2>接手后怎么做</h2>
+
+  <h3>第 0 步：环境体检（每次开工都跑）</h3>
+  <pre><code>cd /workspace
+
+# 1) 补 fetch refspec（重置后只剩 main，看不到 origin/lvgl）
+git config --local remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+git fetch origin
+
+# 2) 确认三条线的位置
+git branch -vv
+git ls-remote --heads origin | grep -E "lvgl|main"
+git log --oneline -3
+
+# 3) 看 release / PR
+gh release list --limit 3
+gh pr list --state open
+
+# 4) 工具链在不在
+ls .toolchain/android-sdk/ndk 2>/dev/null || echo "需要重装"</code></pre>
+
+  <h3>第 1 步：装工具链（约 1~2 分钟，2.5 GB）</h3>
+  <pre><code>bash tools/setup-sandbox-toolchain.sh
+
+# 或装完直接构建：
+bash tools/setup-sandbox-toolchain.sh --build</code></pre>
+  <p class="small muted">脚本失败时会打印手工补救路径；Gradle 三个源都挂了就把 <code>gradle-8.7-bin.zip</code> 放进 <code>~/.toolchain/gradle-home/wrapper/dists/gradle-8.7-bin/bhs2wmbdwecv87pi65oeuq5iu/</code> 再 <code>touch</code> 同名 <code>.ok</code>。</p>
+
+  <h3>第 2 步：改代码 + 冒烟（不需要 Gradle / 模拟器）</h3>
+  <pre><code># 主机端：表达式引擎 661 项、特征点 40 项、复数、几何量代入、UI 冒烟
+bash app/src/main/cpp/tests/build_expr.sh
+bash app/src/main/cpp/tests/build_fd_features.sh
+bash app/src/main/cpp/tests/build_cmath.sh
+bash app/src/main/cpp/tests/build_subst.sh
+bash app/src/main/cpp/tests/build_ui_host.sh   # 输出 30 张 PNG 到 test-artifacts/lvgl-smoke/</code></pre>
+  <p class="small muted">冒烟脚本会覆盖已提交的截图；确认差异是否符合预期再提交。<b>别把输出指到 <code>/tmp</code></b>，会丢。</p>
+
+  <h3>第 3 步：构建 release</h3>
+  <pre><code>export ANDROID_HOME=/workspace/.toolchain/android-sdk
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+export GRADLE_USER_HOME=/workspace/.toolchain/gradle-home
+export JAVA_HOME=/root/.local/share/mise/installs/java/17.0.20+101   # 默认 java 是 25，Gradle 8.7 不支持
+
+sh ./gradlew :app:assembleRelease -PabiSplits :app:assembleDebug</code></pre>
+  <div class="callout warn">
+    <code>-PabiSplits</code> 对 <b>debug 也生效</b>：不会产出 <code>app-debug.apk</code>，
+    而是 <code>app-&lt;abi&gt;-debug.apk</code> 和 <code>app-universal-debug.apk</code>。
+    发版时用 universal 那个。
+  </div>
+
+  <h3>第 4 步：签名（5 个包，v1+v2+v3）</h3>
+  <pre><code>APKS=/workspace/.toolchain/android-sdk/build-tools/34.0.0/apksigner
+KS=~/.android/debug.keystore
+OUT=/workspace/dist/beta-0.6 && mkdir -p $OUT
+
+$APKS sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+  --ks-key-alias androiddebugkey \
+  --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+  --out $OUT/FunctionDrawer-beta-0.6-release-universal.apk \
+  app/build/outputs/apk/release/app-universal-release-unsigned.apk
+
+# 校验必须显式给 --min-sdk-version 21，否则 v1 会被误报成 false
+$APKS verify --min-sdk-version 21 $OUT/FunctionDrawer-beta-0.6-release-universal.apk
+
+# 看证书指纹（每次重置都会变，写进 release notes）
+$APKS verify --min-sdk-version 21 --print-certs $OUT/FunctionDrawer-beta-0.6-release-universal.apk | grep "SHA-256"</code></pre>
+
+  <h3>第 5 步：打 tag + 发 Release</h3>
+  <pre><code># 版本号：默认 1.1 / versionCode 3。只有用户明确说「要上传 / 改号」才动，
+# 规则写在 app/build.gradle.kts 第 44~54 行。
+
+git -c user.name="xiaorui-1232020" -c user.email="xiaorui-1232020@users.noreply.github.com" \
+  tag -a beta-0.6 -m "beta-0.6 测试版：<一句话概括>"
+git push origin beta-0.6
+
+gh release create beta-0.6 --title "beta-0.6" --prerelease \
+  --notes-file /tmp/notes.md \
+  dist/beta-0.6/FunctionDrawer-beta-0.6-release-armeabi-v7a.apk \
+  dist/beta-0.6/FunctionDrawer-beta-0.6-release-arm64-v8a.apk \
+  dist/beta-0.6/FunctionDrawer-beta-0.6-release-x86_64.apk \
+  dist/beta-0.6/FunctionDrawer-beta-0.6-release-universal.apk \
+  dist/beta-0.6/FunctionDrawer-beta-0.6-debug.apk</code></pre>
+
+  <h3>第 6 步：分支同步</h3>
+  <pre><code># 当前 lvgl 比 lvgl-working 多 1 个 merge commit，无独有提交：
+git merge --ff-only origin/lvgl     # 在 lvgl-working 上快进
+git push origin lvgl-working
+
+# 反向（lvgl-working 领先时）：
+git push origin lvgl-working:lvgl    # 快进远端 lvgl，等价于合并后同步</code></pre>
+  <p class="small muted">正常流程还是开 PR：<code>gh pr create --base lvgl --head lvgl-working</code>。用户有时会直接点合并，合并后分支不会自动删除。</p>
+</section>
+
+<!-- ==================== 坑 ==================== -->
+<section id="pitfalls">
+  <h2>已知坑（按踩到概率排序）</h2>
+  <table>
+    <tr><th>坑</th><th>现象</th><th>处理</th></tr>
+    <tr>
+      <td><b>origin/lvgl 引用消失</b></td>
+      <td><code>fatal: ambiguous argument 'origin/lvgl..HEAD'</code></td>
+      <td>重设 <code>remote.origin.fetch</code> 为 <code>+refs/heads/*:refs/remotes/origin/*</code>，再 <code>git fetch</code></td>
+    </tr>
+    <tr>
+      <td><b>沙箱自动提交</b></td>
+      <td>工作区莫名出现 <code>feat: update workspace</code> 提交并推送</td>
+      <td>正常现象。先 <code>git log</code> 确认内容，别重复提交；撤销前先看远端</td>
+    </tr>
+    <tr>
+      <td><b>默认 JDK 是 25</b></td>
+      <td>Gradle 报 <code>Unsupported class file major version</code></td>
+      <td><code>export JAVA_HOME=/root/.local/share/mise/installs/java/17.0.20+101</code></td>
+    </tr>
+    <tr>
+      <td><b>Gradle 代理</b></td>
+      <td>依赖卡在 0 字节，<code>http_proxy</code> 明明设了</td>
+      <td>Gradle 只读 <code>systemProp.*</code>；安装脚本检测到 <code>HTTP_PROXY</code> 会自动写 <code>$GRADLE_USER_HOME/gradle.properties</code></td>
+    </tr>
+    <tr>
+      <td><b>Gradle 分发包 404</b></td>
+      <td><code>curl: (22) ... 404</code>，脚本退出</td>
+      <td>已在 <code>32799a2</code> 修复为多源回退；若仍失败按 playbook 第 1 步手工放置</td>
+    </tr>
+    <tr>
+      <td><b>签名指纹每次都变</b></td>
+      <td>新包覆盖安装报 <code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code></td>
+      <td>debug key 随沙箱重置而重新生成；发版说明必须写「先卸载」，并记录当次 SHA-256</td>
+    </tr>
+    <tr>
+      <td><b>-PabiSplits 连带 debug</b></td>
+      <td>找不到 <code>app-debug.apk</code></td>
+      <td>用 <code>app-universal-debug.apk</code> 签名成 debug 包</td>
+    </tr>
+    <tr>
+      <td><b>tag 被改写后拉取失败</b></td>
+      <td><code>! [rejected] beta-0.4 (already exists)</code></td>
+      <td>改动过的 tag 需要 <code>git fetch --tags --force</code>；发布 tag 尽量别再挪</td>
+    </tr>
+    <tr>
+      <td><b>引导状态被重建清空</b></td>
+      <td>点了高亮区按钮还是「先点高亮区」</td>
+      <td>历史 bug，已在 <code>ui_tour.c</code> 修正：<code>g_step_armed</code> 只在切换步骤时清零，<code>build_step()</code> 里不要重置</td>
+    </tr>
+    <tr>
+      <td><b><code>/tmp</code> 不可靠</b></td>
+      <td>截图、脚本草稿消失</td>
+      <td>中间产物放 <code>/workspace</code>（<code>dist/</code>、<code>app/build/</code> 已 gitignore）</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ==================== 待办 ==================== -->
+<section id="todo">
+  <h2>待办与建议</h2>
+  <ul class="chk">
+    <li><b>真机验证</b>（最高优先级）：表冠、真实触摸采样率、GPU/内存压力都只在主机端用内存显示 + 合成事件验证过。重点看 LRU 2 屏后「列表 ↔ 绘图」来回切的流畅度与内存。</li>
+    <li><b>确认 beta-0.5 的 tag 是否要挪到 <code>0fabd00</code></b>：现在指向 <code>1130000</code>，与构建来源只差 13 张截图，无代码差异。用户此前对 beta-0.4 挪过一次 tag，这次没要求。</li>
+    <li><b>README 还停留在 beta-0.4</b>：可以补 beta-0.5 的发布说明、四个修复，以及「示例库 / 列表缓存失效」相关描述。</li>
+    <li><b>版本号</b>：仍 1.1 / 3。下次发版前问用户是否提档（规则在 <code>app/build.gradle.kts</code> 注释里）。</li>
+    <li><b>LRU 缓存观察</b>：2 屏是凭「列表 ↔ 绘图/编辑」的使用习惯定的，真机上如果发现「存档 → 设置 → 列表」反复重建变慢，可考虑调到 3 屏或加白名单。</li>
+    <li><b>LaTeX 覆盖度</b>：<code>ui_math.c</code> 只排分式/上下标/根号/希腊字母；求值侧完全不认 <code>\</code> 命令。要扩展先改 <code>ui_math_set_text()</code> 的解析分支。</li>
+    <li><b>清理 <code>dist/</code></b>：每个 beta 目录约 34 MB，沙箱重置会清空，但本地长时间不重置会占空间。</li>
+  </ul>
+</section>
+
+<!-- ==================== 附录 ==================== -->
+<section id="appendix">
+  <h2>附录</h2>
+
+  <h3>关键文件地图</h3>
+  <table>
+    <tr><th>路径</th><th>作用</th></tr>
+    <tr><td><code>app/src/main/cpp/engine/</code></td><td>纯 C11 数学引擎（expr / mathfns / viewport / plot / cmath / fd_features）</td></tr>
+    <tr><td><code>app/src/main/cpp/ui/ui.c</code></td><td>屏幕路由 + LRU 缓存（<code>FD_SCREEN_CACHE</code>、<code>cache_touch</code>、<code>evict_screen</code>）</td></tr>
+    <tr><td><code>app/src/main/cpp/ui/ui_editor.c</code></td><td>编辑器 + 键盘 + 校验（<code>find_latex_command</code>、<code>set_error_latex_aware</code>）</td></tr>
+    <tr><td><code>app/src/main/cpp/ui/ui_math.c</code></td><td>轻量数学排版（分式 / 上下标 / 根号 / 希腊字母）</td></tr>
+    <tr><td><code>app/src/main/cpp/ui/ui_tour.c</code></td><td>欢迎页 + 4 步引导（<code>require_tap</code>、<code>mask_clicked</code>）</td></tr>
+    <tr><td><code>app/src/main/cpp/tests/ui_smoke.c</code></td><td>主机端冒烟，输出 <code>test-artifacts/lvgl-smoke/*.png</code></td></tr>
+    <tr><td><code>tools/setup-sandbox-toolchain.sh</code></td><td>工具链安装（SDK / NDK / Gradle，多源回退）</td></tr>
+    <tr><td><code>app/build.gradle.kts</code> 第 44~54 行</td><td>版本号规则：只有用户说上传才提档</td></tr>
+  </table>
+
+  <h3>本次涉及的关键提交</h3>
+  <table>
+    <tr><th>提交</th><th>内容</th></tr>
+    <tr><td class="mono">8ae81c3 / 95d88e2</td><td>三项调整（LRU 缓存、LaTeX 提示、引导需动手）+ 3 张冒烟截图</td></tr>
+    <tr><td class="mono">1ee0608</td><td>新增工具链安装脚本</td></tr>
+    <tr><td class="mono">3c02f74</td><td>README 更新到 beta-0.4 状态</td></tr>
+    <tr><td class="mono">32799a2</td><td>修脚本 <code>gradle-8.7-bin</code> 变量名 + 多源回退</td></tr>
+    <tr><td class="mono">1130000</td><td>用户侧四个修复（示例库、列表预览、存档对话框、存档标题），beta-0.5 的主要内容</td></tr>
+    <tr><td class="mono">0fabd00</td><td>PR #8 合并点，beta-0.5 的构建来源</td></tr>
+    <tr><td class="mono">ad37c3c</td><td>PR #9 合并点，当前 <code>lvgl</code> HEAD</td></tr>
+  </table>
+
+  <h3>常用链接</h3>
+  <ul>
+    <li>仓库：<a href="https://github.com/xiaorui-1232020/DrawFunc">github.com/xiaorui-1232020/DrawFunc</a></li>
+    <li>beta-0.5：<a href="https://github.com/xiaorui-1232020/DrawFunc/releases/tag/beta-0.5">releases/tag/beta-0.5</a></li>
+    <li>beta-0.4：<a href="https://github.com/xiaorui-1232020/DrawFunc/releases/tag/beta-0.4">releases/tag/beta-0.4</a></li>
+    <li>PR #9：<a href="https://github.com/xiaorui-1232020/DrawFunc/pull/9">pull/9</a></li>
+  </ul>
+</section>
+
+<footer>
+  <div>由上一任 agent 生成于 2026-10-29 · 基于当时的仓库、Release 与 PR 状态；交接前请按「第 0 步」重新核对一次。</div>
+</footer>
+
+</div>
+</body>
+</html>
